@@ -1,0 +1,849 @@
+==============================================================================
+  REVISÃO CRÍTICA — ModelagemAerodinamica.py
+  Análise de Dinâmica Longitudinal 3-DOF de UAV (~14 kg)
+
+  Documento: Fundamentação Científica, Metodologia Passo-a-Passo e Críticas
+
+  Referência principal: Cook, M. V. — Flight Dynamics Principles (Cap. 4–6)
+  Data: 04/04/2026
+==============================================================================
+
+
+==============================================================================
+SEÇÃO 1 — FUNDAMENTAÇÃO TEÓRICA: AS EQUAÇÕES DE BRYAN
+==============================================================================
+
+1.1 — Origem e premissas fundamentais
+
+  As equações de movimento utilizadas neste estudo derivam do trabalho de
+  G. H. Bryan (1911, "Stability in Aviation"), que formulou as EOM de um
+  corpo rígido em 6 graus de liberdade usando eixos solidários ao corpo
+  (body-fixed axes). A escolha desse referencial elimina os termos de
+  inércia variável que surgiriam num referencial inercial para um corpo
+  em rotação, ao custo de introduzir termos de acoplamento inercial
+  (produtos q×W, q×U) nas equações de força.
+
+  A redução para 3 GDL longitudinais exige a premissa de SIMETRIA
+  BILATERAL da aeronave e DESACOPLAMENTO lateral-direcional, o que se
+  traduz matematicamente em:
+
+    v = p = r = φ = 0    (velocidade lateral, rolagem, guinada, ângulo de
+                          rolagem identicamente nulos)
+
+  Esta premissa é exata para voo retilíneo simétrico e aproximadamente
+  válida para perturbações de pequena amplitude que não excitem modos
+  laterais. No contexto do presente estudo — degraus de elevator sem
+  perturbação lateral — a premissa é plenamente justificada.
+
+  O sistema reduzido é:
+
+    m(U̇ + qW) = X_aero + T − m·g·sin(θ)     ... (1)  [força axial]
+    m(Ẇ − qU) = Z_aero     + m·g·cos(θ)     ... (2)  [força normal]
+    Iy·q̇      = M_aero                       ... (3)  [momento de arfagem]
+    θ̇         = q                             ... (4)  [cinemática]
+
+  onde (U, W) são as componentes de velocidade em eixos de corpo, q é a
+  taxa de arfagem, e θ é o ângulo de arfagem medido a partir do horizonte.
+
+  JUSTIFICATIVA DOS SINAIS:
+  - Eq. (1): o termo −qW aparece porque a rotação q transporta a componente
+    W para o eixo x (efeito de Coriolis no referencial rotante). O sinal
+    negativo em −m·g·sin(θ) reflete que, com θ > 0 (nariz para cima), a
+    componente gravitacional em x aponta para trás (retarda a aeronave).
+  - Eq. (2): o termo +qU aparece pela mesma razão (rotação transporta U
+    para z). O sinal +m·g·cos(θ) é consequência da convenção z↓: quando
+    θ = 0, o peso projeta-se inteiramente no eixo z positivo (para baixo).
+  - Eq. (3): não há termos giroscópicos porque Iy é assumido constante e
+    p = r = 0 elimina os produtos de inércia cruzados (Ixz·(p² − r²)).
+
+1.2 — Sobre a escolha do eixo de corpo (vs. eixo de estabilidade)
+
+  O eixo de corpo é solidário à fuselagem: x aponta ao longo do eixo
+  longitudinal da aeronave, z aponta para baixo. O eixo de estabilidade
+  é uma variante em que x é alinhado com o vento relativo no trim, de
+  forma que W_trim = 0 por definição.
+
+  O script adota eixo de corpo, o que significa que no trim:
+    U_trim = V₀·cos(αe) = 11.839 m/s
+    W_trim = V₀·sin(αe) = 1.960 m/s
+
+  Se fosse usado eixo de estabilidade, W_trim seria zero e os termos de
+  acoplamento gravitacional seriam simplificados. A escolha do eixo de
+  corpo é mais geral e consistente com Cook, mas exige cuidado na
+  construção da matriz A (o termo −W_trim aparece na posição A[0,2]).
+
+  CRÍTICA: Para αe = 9.4°, We/Ue = 0.166, o que não é negligenciável.
+  A escolha do eixo de corpo é portanto mais apropriada do que o eixo
+  de estabilidade, que frequentemente assume We ≈ 0. Decisão CORRETA.
+
+
+==============================================================================
+SEÇÃO 2 — MODELO AERODINÂMICO
+==============================================================================
+
+2.1 — Estrutura: base + perturbação linear
+
+  O modelo aerodinâmico implementado tem a forma:
+
+    CX = CX_trim + CX_u·(Δu/V₀) + CX_w·(Δw/V₀) + CX_q·q̂ + CX_δe·δe
+    CZ = CZ_trim + CZ_u·(Δu/V₀) + CZ_w·(Δw/V₀) + CZ_q·q̂ + CZ_δe·δe
+    Cm =         + Cm_u·(Δu/V₀) + Cm_w·(Δw/V₀) + Cm_q·q̂ + Cm_δe·δe
+
+  onde Δu = U − Ue, Δw = W − We, e q̂ = q·c̄/(2V) é a taxa de arfagem
+  adimensional.
+
+  JUSTIFICATIVA dos termos de base:
+  No ponto de trim, todas as perturbações são zero (Δu = Δw = q = δe = 0).
+  Os termos perturbativos se anulam e ficam apenas CX_trim e CZ_trim, que
+  representam as forças aerodinâmicas brutas de sustentação e arrasto no
+  equilíbrio. Sem estes termos, as EOM não-lineares teriam forças
+  aerodinâmicas nulas no trim, e a gravidade não seria balanceada — a
+  aeronave "cairia" instantaneamente.
+
+  CX_trim e CZ_trim são calculados a partir do equilíbrio de forças:
+    CZ_trim = −m·g·cos(αe) / (q_e·S)    (de Ẇ = 0)
+    CX_trim = −CD_e·cos(αe) + CL_e·sin(αe)  (projeção de L e D em x_body)
+
+  Cm_trim = 0 por definição: o ponto de referência é um trim equilibrado
+  em momento.
+
+2.2 — Normalização da taxa de arfagem
+
+  A variável q̂ = q·c̄/(2V) é usada para adimensionalizar a taxa de arfagem.
+  Note que o denominador usa V instantâneo (não V₀), o que introduz uma
+  não-linearidade sutil: quando V varia, a mesma taxa q [rad/s] produz
+  um q̂ diferente. Para o modelo linearizado, esta distinção desaparece
+  (V ≈ V₀ + Δu ≈ V₀ para pequenas perturbações).
+
+  CRÍTICA: Esta inconsistência entre V e V₀ é um ponto de atenção teórico,
+  mas na prática é de segunda ordem. Usar V instantâneo é mais fisicamente
+  correto para simulações não-lineares, e o modelo linear corrige
+  automaticamente ao avaliar os derivativos em V = V₀.
+
+2.3 — Sobre os derivativos de estabilidade
+
+  Os 15 derivativos adimensionais (CX_u, CX_w, CX_q, CX_de, CZ_u, CZ_w,
+  CZ_q, CZ_wdot, CZ_de, Cm_u, Cm_w, Cm_q, Cm_wdot, Cm_de, e CX_wdot=0)
+  são TABELADOS — ou seja, fornecidos como dados de entrada, sem que o
+  script derive seus valores de primeiros princípios.
+
+  JUSTIFICATIVA: Cook (Cap. 4) apresenta tabelas de derivativos obtidos por
+  ensaios em túnel de vento ou identificação paramétrica. A abordagem
+  "tabelada" é a mais precisa quando os dados são de boa qualidade,
+  pois captura efeitos que modelos analíticos simplificados não conseguem
+  (interferência asa-fuselagem, efeitos viscosos, etc.).
+
+  CRÍTICA: A origem específica destes valores não está documentada no código.
+  Não há referência à campanha experimental, relatório CFD ou publicação
+  de onde foram extraídos. Para um trabalho acadêmico rigoroso, esta
+  rastreabilidade é essencial. Recomendação: incluir a referência da fonte
+  dos derivativos (e.g., "Tabela 4.x de Cook" ou "Relatório XYZ, p. N").
+
+2.4 — Análise de Cm_u = +0.034 (positivo)
+
+  O derivativo Cm_u representa a variação do momento de arfagem com a
+  velocidade. Um Cm_u > 0 significa que um aumento de velocidade gera um
+  momento nose-up, que por sua vez aumenta α, que aumenta L, que aumenta
+  a altitude, que reduz a velocidade — mas o atraso de fase neste ciclo
+  pode causar INSTABILIDADE DO FUGÓIDE.
+
+  Fisicamente, Cm_u > 0 ocorre em aeronaves cujo centro aerodinâmico se
+  desloca para frente com o aumento de velocidade (efeito de compressibili-
+  dade) ou quando a linha de empuxo está significativamente acima ou abaixo
+  do CG. Em regime subsônico (V₀ = 12 m/s, M << 0.1), o efeito de
+  compressibilidade é nulo, e Cm_u > 0 teria que vir de um offset vertical
+  de empuxo ou de efeito de downwash variável com velocidade.
+
+  CRÍTICA: Para uma aeronave com M ≈ 0.035, um Cm_u = +0.034 é
+  surpreendentemente alto. A fonte deste valor deve ser escrutinada.
+  Se provém de dados experimentais, pode refletir uma configuração
+  incomum (empuxo desalinhado, fuselagem com efeito de carga de nariz).
+  Se é hipotético, deveria ser acompanhado de uma análise de sensibilidade
+  mostrando como os resultados mudam com Cm_u = 0.
+
+
+==============================================================================
+SEÇÃO 3 — PONTO DE EQUILÍBRIO (TRIM)
+==============================================================================
+
+3.1 — Método: analítico vs. numérico
+
+  O script adota um trim ANALÍTICO, onde o estado de equilíbrio é
+  determinado diretamente das condições de balanceamento de forças:
+
+    α_trim = αe = 9.4° (dado de entrada)
+    θ_trim = αe        (γe = 0 → voo nivelado)
+    δe_trim = 0        (referência do elevator)
+    T_trim = m·g·sin(θe) − q_e·S·CX_trim
+
+  JUSTIFICATIVA: No modelo perturbativo de Cook, o ponto de referência
+  (α = αe, δe = 0) é por DEFINIÇÃO o trim. As forças de base CX_trim e
+  CZ_trim foram construídas justamente para satisfazer o equilíbrio.
+  Portanto, o fsolve seria trivial — convergeria em 0 iterações ao ponto
+  exato de entrada. Usar fsolve aqui seria redundante.
+
+  VERIFICAÇÃO: O script avalia os resíduos das EOM no ponto de trim e
+  confirma que U̇ = Ẇ = q̇ = 0 exatamente (resíduos = 0.00e+00). Isto é
+  esperado — e necessário — para validar a consistência interna.
+
+3.2 — Limitações do trim analítico
+
+  CRÍTICA: O trim analítico assume que αe é dado a priori. Numa abordagem
+  mais geral (e mais próxima da realidade operacional), αe deveria ser
+  uma SAÍDA do cálculo de trim, não uma entrada. O procedimento correto
+  seria: dado V₀ e a altitude, resolver o sistema acoplado
+  [L = W·cos(γ), T = D + W·sin(γ), M = 0] para as incógnitas [α, δe, T].
+
+  Contudo, como os derivativos de estabilidade já foram obtidos para esta
+  condição específica (V₀ = 12 m/s, αe = 9.4°), o trim analítico é
+  plenamente coerente com os dados de entrada. A limitação é que o modelo
+  não permite calcular o trim em OUTRA condição de voo sem novos derivativos.
+
+
+==============================================================================
+SEÇÃO 4 — LINEARIZAÇÃO E CORREÇÃO MADELUNG
+==============================================================================
+
+4.1 — Teoria de pequenas perturbações
+
+  A linearização consiste em expressar cada variável como soma de um valor
+  de referência (trim) e uma perturbação:
+
+    U = Ue + u,  W = We + w,  q = 0 + q,  θ = θe + Δθ
+
+  Substituindo nas EOM (1)-(4), retendo apenas termos de primeira ordem
+  (produtos de perturbações desprezados) e usando as condições de
+  equilíbrio para eliminar termos constantes, obtém-se:
+
+    ẋ = A·x + B·δ
+
+  onde x = [u, w, q, Δθ]ᵀ e δ = [δe, ΔT]ᵀ.
+
+  JUSTIFICATIVA: Esta é a abordagem canônica de Cook (Cap. 5). A
+  linearização é válida quando |Δu/Ue| << 1, |Δw/We| << 1, |q·c/(2V₀)| << 1
+  e |Δθ| << 1. Para as perturbações aplicadas neste estudo (degrau de 2°–5°
+  em δe), a região de validade é respeitada nos primeiros segundos (região
+  do SP), mas pode ser violada no longo prazo (fugóide instável → crescimento
+  exponencial das perturbações).
+
+4.2 — Derivativos dimensionais
+
+  A conversão de derivativos adimensionais para dimensionais segue as
+  fórmulas padronizadas de Cook (Cap. 5, Tabela 5.1):
+
+    Xu = (q_e·S·CX_u) / (m·V₀)     [s⁻¹]
+    Zu = (q_e·S·CZ_u) / (m·V₀)     [s⁻¹]
+    Mu = (q_e·S·c̄·Cm_u) / (Iy·V₀)  [s⁻² · rad⁻¹ → equivalente a rad/(s²·m/s)]
+
+  Os termos com subscrito _q e _wdot recebem fator adicional de c̄/(2V₀)
+  na adimensionalização, portanto:
+
+    Mq = (q_e·S·c̄²·Cm_q) / (2·Iy·V₀)  [s⁻¹]
+
+  VERIFICAÇÃO dos valores obtidos:
+    Xu  = +0.0048 s⁻¹  → fraco (esperado: arrasto contribui pouco em u)
+    Zw  = −1.9898 s⁻¹  → forte (−CLα·q_e·S/(m·V₀); domina a resposta em w)
+    Mu  = +0.3975 rad/(s²·m/s)  → positivo → INSTABILIDADE DE VELOCIDADE
+    Mw  = −2.5355 rad/(s²·m/s)  → negativo → estabilidade estática em α (correta)
+    Mq  = −3.7566 s⁻¹  → amortecimento de arfagem (antes de Madelung)
+    Mwdot = −1.7437 s⁻¹ → amortecimento por atraso de downwash
+
+  Os sinais e ordens de magnitude são fisicamente consistentes.
+
+4.3 — Correção Madelung (termos de aceleração ẇ)
+
+  As derivativas CZ_wdot e Cm_wdot representam forças e momentos que
+  dependem da ACELERAÇÃO normal Ẇ (não da velocidade W). Fisicamente,
+  estes termos originam-se do atraso temporal do downwash: quando a asa
+  varia seu ângulo de ataque, o campo de vorticidade a jusante (downwash)
+  leva um tempo finito Δt ≈ l_t/V₀ para alcançar o estabilizador
+  horizontal, onde l_t é a distância asa-EH.
+
+  Na formulação em espaço de estados, a presença de ẇ no lado direito
+  cria uma equação implícita:
+
+    m·(ẇ − q·U) = Z_aero(u,w,q,ẇ,θ,δe) + m·g·cos(θ)
+
+  Rearranjando:
+
+    (1 − Żẇ)·ẇ = Zu·u + Zw·w + (Zq + Ue)·q − g·sin(θe)·Δθ + Zδe·δe
+
+  onde Żẇ = Zwdot = −0.0642 (adimensional). O fator (1 − Żẇ) = 1.0642
+  representa uma "massa aparente" acrescida de 6.4% — a aceleração do ar
+  arrastado pelo downwash retarda a resposta em w.
+
+  A substituição desta expressão na equação de momento gera os derivativos
+  "corrigidos" (com asterisco *):
+
+    Mq* = Mq + Mẇ·(Zq + Ue)/(1 − Żẇ)
+
+  RESULTADO NUMÉRICO NOTÁVEL:
+    Mq  (sem Madelung) = −3.757 s⁻¹
+    Mq* (com Madelung) = −22.835 s⁻¹   → 6.1× MAIOR
+
+  JUSTIFICATIVA FÍSICA: O termo Mẇ acopla a dinâmica de w (dominada por
+  Zw e Zq+Ue) à equação de momento. Quando a aeronave rota (q ≠ 0), a
+  variação de W que resulta (via Zq+Ue) produz uma aceleração ẇ, que por
+  sua vez gera um momento adicional via Mẇ. Este efeito de retroalimentação
+  é forte nesta aeronave porque:
+    (a) Mẇ = −1.744 s⁻¹ é grande (downwash significativo)
+    (b) Zq + Ue = −0.195 + 11.839 ≈ 11.644 m/s é dominado por Ue
+
+  CRÍTICA: A magnitude da correção Madelung (6.1×) é INCOMUM. Para
+  aeronaves tripuladas típicas, |Mq*|/|Mq| é da ordem de 1.5–2.5.
+  O fator 6.1× sugere que:
+    (a) Mẇ/Mq é anormalmente grande, possivelmente por uma geometria
+        com estabilizador muito afastado e/ou CLα_EH muito alto, OU
+    (b) Mq é anormalmente pequeno em relação à escala da aeronave.
+
+  De facto, o valor Cm_q = −1.2732 corresponde a uma distância efetiva de
+  amortecimento curta. Comparando: Cm_q ≈ −2·CLα_EH·VH·(l_EH/c̄), para
+  VH = 0.5 (volume de cauda típico de UAV), CLα_EH ≈ 3.5/rad, e
+  l_EH/c̄ ≈ 3, teríamos Cm_q ≈ −10.5, muito maior que −1.27. Isto
+  sugere que a cauda é curta e/ou sub-dimensionada, o que aumenta a
+  importância relativa do termo Mẇ.
+
+  CONSEQUÊNCIA PARA A DINÂMICA: O Mq* muito negativo (forte amortecimento)
+  explica o SP OVERDAMPED. Sem a correção Madelung, o SP seria subamortecido
+  (ζ_SP < 1) — o que mudaria qualitativamente o comportamento.
+
+
+==============================================================================
+SEÇÃO 5 — CONSTRUÇÃO DA MATRIZ A
+==============================================================================
+
+5.1 — Estrutura da matriz
+
+  A(4×4):
+  ┌                                                              ┐
+  │  Xu        Xw        Xq−We        −g·cos(θe)                │
+  │  Zu*       Zw*       (Zq+Ue)*     −g·sin(θe)/(1−Żẇ)        │
+  │  Mu*       Mw*       Mq*          Mg*                       │
+  │  0         0         1            0                          │
+  └                                                              ┘
+
+  Valores numéricos:
+  ┌                                                    ┐
+  │  +0.005    +0.031    −1.960    −9.678               │
+  │  −0.435    −1.870    +10.941   −1.506               │
+  │  +1.156    +0.725    −22.835   +2.625               │
+  │  0         0         +1        0                    │
+  └                                                    ┘
+
+  VERIFICAÇÃO DIMENSIONAL: Todos os elementos têm dimensão [s⁻¹] ou
+  [m/s²]/[m/s] = [s⁻¹] (exceto a última linha, que é [1] para a
+  cinemática θ̇ = q). A consistência dimensional está correta.
+
+  VERIFICAÇÃO DO TERMO A[0,2] = Xq − We:
+  Cook (Cap. 5, eq. 5.xx) mostra que na equação de U̇ linearizada, o
+  termo em q é (Xq − We)·q. Fisicamente:
+  - Xq é a força axial aerodinâmica devida a q (geralmente ≈ 0)
+  - −We·q surge do termo de Coriolis −q·W no referencial rotante
+  Aqui, Xq = 0 (CX_q = 0), então A[0,2] = −We = −1.960.
+
+  VERIFICAÇÃO DO TERMO A[1,2] = (Zq + Ue)/(1−Żẇ):
+  A[1,2] = (−0.1946 + 11.839)/1.0642 = 10.941 s⁻¹
+  Este termo grande é dominado por Ue/denom, que representa o efeito
+  geométrico: uma taxa de arfagem q rota o vetor velocidade, gerando
+  uma componente de velocidade normal ΔW = q·Ue·Δt. É o mecanismo
+  fundamental do período curto.
+
+5.2 — Termo de gravidade na linha de momento
+
+  A[2,3] = Mg* = Mẇ·(−g·sin(θe))/(1−Żẇ) = +2.625
+
+  Este termo surge exclusivamente da correção Madelung. Sem Madelung,
+  a eq. de momento não teria dependência direta de θ (seria A[2,3] = 0).
+  Fisicamente: uma perturbação em θ modifica a componente gravitacional
+  na eq. de W, que por sua vez gera ẇ, que gera momento via Mẇ.
+
+  CRÍTICA: Na formulação de Cook SEM eixo de estabilidade (eixo de corpo),
+  a equação de momento linearizada pode conter um termo adicional de
+  gravidade que não depende de Madelung. Especificamente, se o CG não
+  coincide com o ponto de referência, há um braço gravitacional. O script
+  OMITE este termo — o que é correto apenas se o ponto de referência das
+  forças é o CG (premissa padrão de Bryan/Cook).
+
+
+==============================================================================
+SEÇÃO 6 — AUTOVALORES E IDENTIFICAÇÃO DOS MODOS
+==============================================================================
+
+6.1 — Resultados
+
+  Os autovalores da matriz A são:
+
+    λ₁ = −23.243     (real, SP polo rápido)
+    λ₂ = −1.511      (real, SP polo lento)
+    λ₃,₄ = +0.027 ± 0.714j   (complexo conjugado, Fugóide)
+
+  CLASSIFICAÇÃO:
+  - λ₁ e λ₂ pertencem ao modo PERÍODO CURTO (SP) porque têm as maiores
+    magnitudes e estão no semiplano esquerdo (estáveis). O SP governa a
+    resposta rápida em α e q.
+  - λ₃,₄ pertencem ao modo FUGÓIDE (PH) porque têm baixa frequência
+    (ωn = 0.714 rad/s → T = 8.8 s) e estão no semiplano DIREITO (instáveis).
+
+6.2 — SP overdamped: justificativa física
+
+  O produto Zα·Mα = 23.877 × (−30.426) = −726.5 < 0.
+
+  A aproximação clássica de 2ª ordem para o SP é:
+    s² + (Zα/V₀ + Mq*)·s + (Zα·Mα/V₀²) ≈ 0
+
+  Para ωn_sp² ≈ Zα·Mα/(V₀²), um produto negativo implicaria ωn² < 0,
+  raiz imaginária pura — impossível para um modo oscilatório real.
+
+  O que acontece fisicamente: Mα = Mw·V₀ = −2.536·12 = −30.4 rad/s²/rad
+  é NEGATIVO (estabilidade estática), mas Zα = −Zw·V₀ = +1.990·12 = +23.9
+  é positivo (força normal Z aumenta com α → empurra o nariz para baixo).
+  O sinal de Zα depende da convenção de eixo (z↓), e Zα > 0 na convenção
+  de Cook (Cap. 5, eq. 5.xx).
+
+  A combinação Mα < 0 e Zα > 0 gera dois polos reais em vez de um par
+  complexo: o forte amortecimento (Mq* = −22.8) separa as raízes.
+  O discriminante do polinômio de 2ª ordem é:
+
+    Δ_SP = (Zα/V₀ + Mq*)² − 4·Zα·Mα/V₀² > 0  →  raízes reais
+
+  Δ_SP = (1.990 + 22.835)² − 4·(−30.4·1.990) = 615.7 + 242.0 = 857.7 > 0
+
+  Confirmado: SP overdamped. As constantes de tempo são:
+    τ₁ = 1/|λ₁| = 0.043 s (resposta ultrarápida — 5τ₁ = 0.21 s)
+    τ₂ = 1/|λ₂| = 0.662 s (resposta moderadamente rápida — 5τ₂ = 3.3 s)
+
+  CONSEQUÊNCIA PRÁTICA: O piloto (ou autopiloto) sente uma resposta em
+  arfagem sem overshoot — o nariz sobe ou desce monotonicamente sem
+  oscilação após uma entrada de elevator. Isto pode ser desejável para
+  controle preciso, mas a ausência de oscilação natural pode indicar uma
+  aeronave pesadamente amortecida ("sluggish" em arfagem).
+
+6.3 — Fugóide instável: análise
+
+  ωn_PH = 0.7142 rad/s,  ζ_PH = −0.0373
+
+  Um ζ negativo indica que o polo está no semiplano direito do plano s
+  (Re(λ) > 0). O tempo para dobrar a amplitude é:
+
+    T_dobra = ln(2)/σ = ln(2)/0.0267 = 26.0 s
+
+  Comparação com Lanchester:
+    ωn_PH (Lanchester) = g√2/V₀ = 1.156 rad/s  vs. 0.714 calculado
+    ζ_PH (Lanchester)  = CD/(√2·CL) = +0.108   vs. −0.037 calculado
+
+  A aproximação de Lanchester FALHA em dois aspectos:
+  (a) ωn: erro de 62% — Lanchester despreza a contribuição de Mα e Mq* no
+      acoplamento com a frequência do fugóide. Para aeronaves com SP
+      overdamped, a separação de modos não é tão limpa e o fugóide é
+      fortemente influenciado pelos derivativos de momento.
+  (b) ζ: sinal OPOSTO — Lanchester assume Cm_u = 0, que é a condição
+      suficiente para estabilidade do fugóide em regime subsônico. Com
+      Cm_u = +0.034, a instabilidade é real.
+
+  CRÍTICA: O valor ωn_PH = 0.714 rad/s (T = 8.8 s) é fisicamente plausível
+  para um UAV de 12 m/s, embora esteja significativamente abaixo da
+  previsão de Lanchester. Isto reflete o forte acoplamento SP–PH nesta
+  aeronave (SP overdamped contamina o fugóide).
+
+  A instabilidade do fugóide, embora teoricamente presente, é FRACA
+  (T_dobra = 26 s). Na prática, um piloto ou SAS simples pode corrigir
+  este modo com facilidade.
+
+
+==============================================================================
+SEÇÃO 7 — SIMULAÇÃO TEMPORAL
+==============================================================================
+
+7.1 — Método numérico: RK45
+
+  O script usa solve_ivp com método RK45 (Dormand-Prince 4(5)), com
+  tolerâncias rtol = 1e-8 e atol = 1e-10.
+
+  JUSTIFICATIVA: RK45 é adequado para este problema porque:
+  - As EOM são suaves (não há descontinuidades)
+  - O sistema não é stiff (a razão entre as constantes de tempo
+    extremas é |λ₁|/|Re(λ₃)| = 23.24/0.027 ≈ 860, o que está no
+    limite de stiffness mas ainda tratável por RK45 com tolerâncias
+    apertadas)
+
+  CRÍTICA: Para um estudo mais rigoroso, recomendaria testar com um
+  método implícito (e.g., 'Radau' ou 'BDF') e comparar os resultados
+  para confirmar que o RK45 não está sofrendo de instabilidade numérica
+  sutil. A razão |λ_max|/|λ_min| ≈ 860 está numa zona onde ambos os
+  métodos deveriam funcionar, mas o método implícito seria mais eficiente
+  em número de passos.
+
+  Tolerâncias rtol = 1e-8, atol = 1e-10:
+  Estas tolerâncias são mais apertadas que o necessário para visualização
+  (rtol = 1e-5 bastaria), mas adequadas para cálculos de precisão como o
+  INL. A escolha é conservadora e correta.
+
+7.2 — Suficiência dos tempos de simulação
+
+  BLOCO 6 (degrau de 5°): t_end = 60 s, 3000 pontos
+
+    Justificativa do tempo: O período do fugóide é T_PH = 8.8 s.
+    60 s captura aproximadamente 6.8 períodos do fugóide, o que é
+    suficiente para observar o caráter instável (crescimento exponencial).
+    O SP decai em 5τ₂ ≈ 3.3 s, portanto está completamente resolvido.
+
+    CRÍTICA: 60 s é suficiente para demonstrar a instabilidade, mas
+    como ζ_PH = −0.037, o crescimento é lento: a amplitude dobra a cada
+    26 s. Em 60 s, a amplitude cresce por fator 2^(60/26) ≈ 4.8×.
+    Para ver o crescimento instável CLARAMENTE, 90–120 s seriam
+    preferíveis (fator 8–16×). Contudo, para perturbações grandes
+    (degrau de 5°), as não-linearidades podem limitar o crescimento ou
+    causar divergência antes de 60 s, tornando simulações mais longas
+    fisicamente questionáveis dentro do modelo linear perturbativo.
+
+    Resolução temporal: Δt = 60/3000 = 0.02 s. A maior frequência
+    relevante é |λ₁| = 23.24 rad/s → f₁ = 3.7 Hz → T₁ = 0.27 s.
+    Com Δt = 0.02 s, o critério de Nyquist exige Δt < T₁/2 = 0.135 s.
+    SATISFEITO com margem ampla (fator 6.7×). O solver adaptativo (RK45)
+    usa internamente passos ainda menores quando necessário.
+
+  BLOCO 6b (superposição): t_end = 8 s, 2000 pontos
+
+    Justificativa: 8 s captura o decaimento completo do SP (5τ₂ = 3.3 s)
+    e o início do primeiro período do fugóide (T_PH = 8.8 s).
+
+    CRÍTICA: A janela de 8 s é um compromisso: curta o suficiente para
+    não ser dominada pelo crescimento exponencial do fugóide instável
+    (que inflacionaria artificialmente o INL), mas longa o suficiente
+    para capturar a resposta completa do SP.
+
+    O INL obtido (25.7% médio) é ALTO. Interpretação:
+    - Δw (INL = 5.86%): essencialmente linear — SP domina, perturbação
+      pequena, cinemática simples
+    - Δα (INL = 12.68%): moderado — α = arctan(W/U) introduz não-
+      linearidade trigonométrica (arctan não é linear em Δw, Δu)
+    - Δu, q, Δθ (INL = 29–44%): forte — a oscilação incipiente do
+      fugóide amplia as diferenças entre trajetórias não-lineares
+
+    A nota no código explica corretamente que a não-linearidade capturada
+    provém das EOM (termos q×U, q×W, sin/cos θ), não da aerodinâmica
+    (que é linear por construção).
+
+    CRÍTICA ADICIONAL: Para uma avaliação mais rigorosa da linearidade
+    do MODELO AERODINÂMICO (e não das EOM cinemáticas), seria preferível
+    usar degraus menores (0.5° e 1.0°) e verificar se o INL cai para
+    < 5%. Se sim, confirma que o modelo perturbativo é válido para
+    pequenas perturbações, como esperado. O degrau de 2° pode já estar
+    fora do regime "pequeno" para uma aeronave com αe = 9.4° e stall
+    talvez em α ≈ 12–15°. Amplitudes menores isolariam melhor o efeito.
+
+  BLOCO 6c (retrato de fase): t_end = 20 s, 2000 pontos
+
+    Justificativa: 20 s é suficiente para as trajetórias do SP (que
+    convergem em ≈3.3 s) e para observar o início da divergência do
+    fugóide (que começa a dominar após ≈10 s).
+
+    CRÍTICA: Para perturbações grandes (Δα = ±8°), a aeronave pode
+    estar próxima do stall (αe + 8° = 17.4°). O modelo aerodinâmico
+    linear NÃO inclui saturação de CL em stall, portanto as trajetórias
+    para Δα = +8° são fisicamente questionáveis. O retrato de fase
+    deveria incluir um aviso sobre o domínio de validade α < α_stall.
+
+    As condições iniciais perturbam apenas α (mantendo V = V₀ constante
+    via U_ic = V₀·cos(α_ic), W_ic = V₀·sin(α_ic)). Isto é fisicamente
+    correto — simula uma rajada vertical instantânea.
+
+  BLOCO 6d (excitação modal): t_end = 60 s, 6000 pontos
+
+    Justificativa: 60 s para capturar pelo menos 6 períodos do fugóide.
+    6000 pontos → Δt = 0.01 s (amostragem ampla).
+
+    CRÍTICA: A perturbação ΔU = +1 m/s (8% de V₀) é SIGNIFICATIVA.
+    Para uma análise "linear", perturbações de 1–2% são preferíveis.
+    Com 8%, as não-linearidades das EOM já estão presentes e a resposta
+    observada pode diferir significativamente da previsão linear.
+    Recomendação: incluir simulação com ΔU = 0.12 m/s (1%) para comparação.
+
+
+==============================================================================
+SEÇÃO 8 — FUNÇÕES DE TRANSFERÊNCIA E BODE
+==============================================================================
+
+8.1 — Extração via ss2tf
+
+  O script usa scipy.signal.ss2tf para converter o sistema (A, B, C, D) em
+  funções de transferência θ(s)/δe(s) e q(s)/δe(s). O denominador comum
+  é a equação característica:
+
+    Δ(s) = s⁴ + 24.700·s³ + 34.300·s² + 10.754·s + 17.908
+
+  Verificação: as raízes de Δ(s) coincidem com os autovalores da matriz A
+  (confirmado no output do script). Os coeficientes podem ser interpretados:
+
+    a₃ = 24.700 ≈ −Tr(A) = −(Xu + Zw* + Mq*) = −(0.005 − 1.870 − 22.835) = 24.700 ✓
+    a₀ = 17.908 = det(A) (contribuição de todos os modos ao ganho estático)
+
+8.2 — Diagrama de Bode
+
+  Faixa de frequência: ω = [10⁻³, 10²] rad/s. Cobre 5 décadas, incluindo
+  as frequências dos modos PH (0.714 rad/s) e SP (23.24 rad/s).
+
+  JUSTIFICATIVA: A faixa é ampla o suficiente para revelar:
+  - A ressonância do fugóide (pico próximo a ωn_PH)
+  - A ressonância do SP (pico próximo a ωn_SP — embora overdamped, o
+    polo real em −1.51 cria um "joelho" na curva de amplitude)
+  - O comportamento assintótico em alta frequência (roll-off de −20n dB/dec)
+
+  CRÍTICA: A faixa de frequência é adequada. O diagrama de Bode de θ/δe
+  é particularmente importante para análise de qualidades de voo (flying
+  qualities), pois a fase de θ/δe determina a margem de fase do loop de
+  controle de atitude. O script não calcula explicitamente a margem de fase
+  e ganho, o que seria uma extensão valiosa.
+
+  AUSÊNCIA RELEVANTE: Não há um mapa de zeros no plano complexo. Os zeros
+  de θ(s)/δe(s) determinam a forma do numerador e influenciam a resposta
+  transitória. Tipicamente, θ/δe tem um par de zeros próximos ao eixo
+  imaginário que criam um "antiresonância" visível no Bode. Esta análise
+  complementaria o diagrama.
+
+
+==============================================================================
+SEÇÃO 9 — RESULTADOS CONSOLIDADOS E INTERPRETAÇÃO FÍSICA
+==============================================================================
+
+  ┌─────────────────┬──────────────────────────────────────────────┐
+  │ Quantidade      │ Valor                                        │
+  ├─────────────────┼──────────────────────────────────────────────┤
+  │ SP polo 1       │ λ₁ = −23.243 s⁻¹  (τ₁ = 0.043 s)           │
+  │ SP polo 2       │ λ₂ = −1.511 s⁻¹   (τ₂ = 0.662 s)           │
+  │ SP ζ            │ > 1 (overdamped — dois polos reais)          │
+  │ PH λ            │ +0.027 ± 0.714j s⁻¹                         │
+  │ PH ωn           │ 0.7142 rad/s  (T = 8.80 s)                  │
+  │ PH ζ            │ −0.0373 (INSTÁVEL)                          │
+  │ PH T_dobra      │ 26.0 s                                      │
+  │ Mq (s/ Madel.)  │ −3.757 s⁻¹                                  │
+  │ Mq* (c/ Madel.) │ −22.835 s⁻¹  (fator 6.1×)                  │
+  │ CL_trim         │ 1.267                                        │
+  │ CD_trim         │ 0.194                                        │
+  │ T_trim          │ 20.76 N                                      │
+  │ INL (8 s, 2°/4°)│ 25.7% médio (fortemente não-linear nas EOM) │
+  └─────────────────┴──────────────────────────────────────────────┘
+
+  INTERPRETAÇÃO GLOBAL:
+  Esta aeronave (UAV ~14 kg, V₀ = 12 m/s) apresenta uma dinâmica
+  longitudinal atípica:
+
+  (a) SP OVERDAMPED: O forte amortecimento efetivo Mq* = −22.8 s⁻¹
+      (amplificado 6× pela correção Madelung) elimina a oscilação
+      natural do SP. A resposta a perturbações em α é puramente
+      exponencial, com duas constantes de tempo muito diferentes
+      (0.043 s e 0.662 s). Isto cria uma resposta de "dois tempos":
+      decaimento muito rápido seguido de ajuste mais lento.
+
+  (b) FUGÓIDE INSTÁVEL: Cm_u = +0.034 > 0 gera instabilidade de
+      velocidade. A aeronave não retorna espontaneamente ao trim após
+      perturbações em velocidade — em vez disso, oscila com amplitude
+      crescente (T_dobra = 26 s). Na prática, isto exige um sistema
+      de aumento de estabilidade (SAS) ou intervenção do operador.
+
+
+==============================================================================
+SEÇÃO 10 — CRÍTICAS E RECOMENDAÇÕES
+==============================================================================
+
+10.1 — Modelo aerodinâmico: limitações estruturais
+
+  CRÍTICA 1 — NATUREZA HÍBRIDA DO MODELO NÃO-LINEAR
+
+  O modelo aerodinâmico usa coeficientes lineares perturbativos multiplicados
+  por q_dyn instantâneo (0.5·ρ·V²). Isto cria um modelo "semi-linear":
+  as variações de CX, CZ, Cm são lineares em (Δu, Δw, q, δe), mas a força
+  resultante é F = q_dyn(V)·S·C, onde q_dyn varia quadraticamente com V.
+  Este acoplamento é a principal fonte de não-linearidade nas simulações.
+
+  Um modelo VERDADEIRAMENTE não-linear usaria:
+    CL(α) = CL₀ + CLα·α + CLα²·α²/2 + saturação em stall
+    CD(α) = CD₀ + k·CL(α)²
+    Cm(α) = Cm₀ + Cmα·α + ... (possivelmente com histerese em stall)
+
+  A ausência de um modelo de stall significa que para grandes perturbações
+  (Δα > 5°), os resultados são extrapolações lineares sem validade física.
+
+  CRÍTICA 2 — DERIVATIVOS CONSTANTES COM VELOCIDADE
+
+  As derivadas de estabilidade são avaliadas uma única vez para V₀ = 12 m/s.
+  Em realidade, CLα, Cmα, etc., variam com o número de Reynolds e Mach.
+  Para um UAV a 12 m/s (Re ≈ 400.000 com c̄ = 0.5 m), o escoamento pode
+  estar na faixa transicional laminar-turbulento, onde CLα e CD0 são
+  sensíveis a Re. Uma varredura paramétrica de velocidade (como tentada
+  no Script B de referência) exigiria derivativos re-calculados para cada V.
+
+  CRÍTICA 3 — CX_wdot = 0 e CX_q = 0
+
+  Embora estes termos sejam frequentemente desprezáveis, sua omissão deveria
+  ser justificada por uma estimativa de ordem de magnitude. CX_q = 0 é
+  padrão (não há mecanismo aerodinâmico significativo), mas CX_wdot = 0
+  implica que a aceleração normal não afeta a força axial — o que é razoável
+  para baixo Mach mas poderia ser relevante para perfis de alta sustentação.
+
+10.2 — Correção Madelung: verificação cruzada necessária
+
+  A amplificação de 6.1× no Mq é a característica mais marcante e
+  consequente deste modelo. Recomendações:
+
+  (a) Verificar os valores de CZ_wdot = −0.3997 e Cm_wdot = −0.5910
+      contra estimativas analíticas:
+        CZ_wdot ≈ −2·CLα_EH·VH·(dε/dα)
+        Cm_wdot ≈ −2·CLα_EH·VH·(l_EH/c̄)·(dε/dα)
+      onde dε/dα é o gradiente de downwash.
+
+  (b) Calcular o SP COM e SEM Madelung e reportar ambos os resultados.
+      O script já faz isto implicitamente (Mq vs. Mq*), mas o relatório
+      deveria incluir uma tabela comparativa mostrando como os autovalores
+      mudam.
+
+  (c) Realizar análise de sensibilidade: variar Cm_wdot de −1.0 a 0.0
+      e observar a transição SP de overdamped para underdamped.
+
+10.3 — Teste de superposição: refinamento
+
+  CRÍTICA: O INL de 25.7% é esperável para degraus de 2°/4° num sistema
+  com fugóide instável e EOM não-lineares. Para extrair informação útil
+  sobre a validade do modelo PERTURBATIVO, seria necessário:
+
+  (a) Testar com degraus menores: 0.25°/0.50° e 0.5°/1.0°
+  (b) Restringir a janela temporal ao regime SP puro (0–5 s), excluindo
+      completamente o fugóide
+  (c) Comparar INL em janela curta (SP) vs. janela longa (SP + fugóide)
+      para separar as fontes de não-linearidade
+
+  O teste atual mede a não-linearidade TOTAL (cinemática + geométrica),
+  que é dominada pelos termos q×U e sin(θ) — não é um teste da validade
+  do modelo perturbativo de Cook.
+
+10.4 — Excitação modal: ortogonalidade
+
+  CRÍTICA: A perturbação ΔU = +1 m/s para excitar o fugóide NÃO excita
+  o fugóide de forma pura. O autovetor do fugóide é uma combinação
+  específica de [u, w, q, θ] — não é alinhado com o eixo u.
+
+  Para excitação PURA de um modo, a condição inicial deveria ser
+  proporcional ao autovetor correspondente:
+
+    x₀ = Re(v_fugóide) × amplitude
+
+  onde v_fugóide é o autovetor associado a λ₃ ou λ₄. O script calcula
+  os autovetores (eigenvectors) mas não os utiliza para a excitação modal.
+
+  Recomendação: incluir excitação pelo autovetor e comparar com a
+  excitação heurística (ΔU ou ΔW). A excitação pelo autovetor produziria
+  uma resposta puramente modal (exponencial × senoidal para o fugóide,
+  puramente exponencial para o SP), sem contaminação cruzada.
+
+10.5 — Retrato de fase: completude
+
+  CRÍTICA: O retrato de fase plota apenas o plano (Δα, q), que é o
+  subespaço do SP. Para uma visão completa da dinâmica, seria útil
+  adicionar o plano (Δu, Δθ), que é o subespaço do fugóide. Isto
+  revelaria a espiral instável do fugóide no espaço energia-atitude.
+
+  Adicionalmente, as condições iniciais perturbam apenas α com V constante.
+  Uma família de ICs com perturbação em V (mantendo α = α_trim) revelaria
+  as trajetórias do fugóide no retrato de fase.
+
+10.6 — Ausências no estudo
+
+  (a) ANÁLISE DE SENSIBILIDADE PARAMÉTRICA: Como os resultados mudam com
+      variações de ±20% em Cm_u, Cm_w, Cm_wdot, Iy? Particularmente
+      importante dado que:
+      - Cm_u = +0.034 é o driver da instabilidade do fugóide
+      - Cm_wdot = −0.591 é o driver do SP overdamped via Madelung
+      - Iy = 0.385 kg·m² tem incerteza significativa em UAVs
+
+  (b) RESPOSTA A RAJADA: O estudo usa apenas degraus de elevator. Uma
+      perturbação de rajada vertical (wgust = 1 m/s, por exemplo) é mais
+      representativa das condições operacionais e excitaria naturalmente
+      o SP.
+
+  (c) QUALIDADES DE VOO: Os resultados não são comparados com critérios
+      de qualidades de voo (MIL-F-8785C para aeronaves tripuladas, ou
+      normas equivalentes para UAV). O ζ_SP, ωn_SP, ζ_PH e ωn_PH poderiam
+      ser plotados sobre os diagramas de thumbprint para avaliar o nível
+      de aceitabilidade.
+
+  (d) MARGEM DE FASE E GANHO: O Bode é apresentado sem extração de
+      margens de estabilidade em malha fechada. Para θ/δe, a margem de fase
+      indica a robustez de um eventual controle de atitude proporcional.
+
+  (e) SIMULAÇÃO DA TRAJETÓRIA NO PLANO VERTICAL: As EOM resolvem
+      velocidades e ângulos, mas não incluem a equação de trajetória:
+        ẋ = U·cos(θ) − W·sin(θ)
+        ḣ = U·sin(θ) − W·cos(θ)
+      Plotar a trajetória no plano (x, h) daria uma imagem intuitiva
+      do movimento do fugóide (oscilação de altitude) e do efeito do SP
+      (variação rápida de θ sem mudança significativa de trajetória).
+
+
+==============================================================================
+SEÇÃO 11 — SÍNTESE: PONTOS FORTES E FRACOS
+==============================================================================
+
+  PONTOS FORTES:
+  ┌────────────────────────────────────────────────────────────────┐
+  │ 1. Formulação rigorosa das EOM de Bryan em eixo de corpo      │
+  │ 2. Inclusão correta das forças de base no modelo NL           │
+  │    (resolve o bug clássico do trim em modelos perturbativos)  │
+  │ 3. Correção Madelung completa e corretamente implementada     │
+  │ 4. Verificação cruzada: NL vs. Linear, eigenvalues vs. roots  │
+  │ 5. Identificação correta do SP overdamped e PH instável       │
+  │ 6. Comparação com aproximações analíticas (Lanchester, ωn_SP) │
+  │ 7. Teste de superposição para quantificar não-linearidade     │
+  │ 8. Retrato de fase e excitação modal (análise qualitativa)    │
+  │ 9. Documentação inline abundante (premissas, fórmulas, refs.) │
+  │ 10. Tolerâncias numéricas conservadoras e adequadas           │
+  └────────────────────────────────────────────────────────────────┘
+
+  PONTOS FRACOS / LACUNAS:
+  ┌────────────────────────────────────────────────────────────────┐
+  │ 1. Fonte dos derivativos de estabilidade não documentada      │
+  │ 2. Cm_u = +0.034 não justificado para regime subsônico       │
+  │ 3. Ausência de modelo de stall (CL saturado)                  │
+  │ 4. Amplificação Madelung de 6.1× não verificada cruzadamente │
+  │ 5. INL inflacionado pelo fugóide instável; conclusão de "não- │
+  │    linearidade forte" não reflete a validade do modelo linear  │
+  │    para pequenas perturbações                                  │
+  │ 6. Excitação modal não usa autovetores (contaminação cruzada) │
+  │ 7. Ausência de análise de sensibilidade paramétrica           │
+  │ 8. Sem cálculo de margens de fase/ganho no Bode               │
+  │ 9. Sem simulação de trajetória no plano vertical              │
+  │ 10. Sem comparação com critérios de qualidades de voo         │
+  └────────────────────────────────────────────────────────────────┘
+
+
+==============================================================================
+SEÇÃO 12 — CONCLUSÃO
+==============================================================================
+
+  O script ModelagemAerodinamica.py implementa de forma competente e
+  bem documentada a análise de dinâmica longitudinal 3-DOF de um UAV,
+  seguindo a metodologia de Cook (Capítulos 4–6). A formulação matemática
+  é correta, a implementação numérica é sólida, e os resultados são
+  internamente consistentes.
+
+  Os resultados principais — SP overdamped com τ = [0.043, 0.662] s e
+  fugóide instável com ζ = −0.037 — são consequências diretas e
+  verificáveis dos derivativos de entrada. A forte amplificação Madelung
+  (×6.1) é o aspecto mais notável e merece verificação experimental
+  independente.
+
+  As críticas identificadas são, em sua maioria, extensões que
+  enriqueceriam a análise (sensibilidade, qualidades de voo, trajetória)
+  sem invalidar os resultados existentes. A exceção é o teste de
+  superposição (Bloco 6b), que precisa de refinamento metodológico para
+  separar não-linearidade cinemática (das EOM) de não-linearidade
+  aerodinâmica (do modelo de forças).
+
+  Em termos pedagógicos, o script é um exemplo completo e instrutivo de
+  como ir das EOM brutas de Bryan até a análise modal e frequencial
+  completa, passando por linearização com Madelung — um pipeline que
+  raramente é apresentado de forma integrada em livros-texto.
+
+
+==============================================================================
+  FIM DO DOCUMENTO — revisao_critica.txt
+==============================================================================
