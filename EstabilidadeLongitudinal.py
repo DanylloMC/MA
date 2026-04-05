@@ -53,31 +53,193 @@ Ue = V0 * np.cos(alpha_e)    # Componente axial de trim [m/s]
 We = V0 * np.sin(alpha_e)    # Componente normal de trim [m/s]
 q_dyn_e = 0.5 * rho * V0**2  # Pressão dinâmica de trim [Pa]
 
+# =============================================================================
+# BLOCO 0 — DERIVAÇÃO ANALÍTICA DE DERIVATIVOS A PARTIR DE PARÂMETROS
+#           CONSTRUTIVOS (Helmbold, volume de cauda, teoria de downwash)
+#
+# REFERÊNCIAS:
+#   - Helmbold (1942) / Prandtl-Glauert: CLα para asas de alongamento finito
+#   - Cook (Cap. 4): derivativos dimensionais e adimensionais em eixo de corpo
+#   - Perkins & Hage / Nelson: fórmulas para Cm_q, Cm_wdot via EH
+#
+# PREMISSAS DO BLOCO 0:
+#   - Contribuição da asa pelo método de Helmbold (válido para AR < 4·β²/κ)
+#   - Estabilizador horizontal modelado como asa isolada (sem interferência)
+#   - Downwash linear com α: ε = ε₀ + (dε/dα)·α
+#   - Cm_u = 0 (velocidade-derivada de momento): justificado em regime
+#     subsônico profundo (M = V₀/a = 12/340 = 0.035), onde os efeitos de
+#     compressibilidade (∂CD/∂M, ∂CL/∂M) são < 0.1% e podem ser desprezados.
+#     Para M > 0.3, Cm_u deve ser recalculado via ∂Cm/∂M × 2M/V₀.
+#   - CX_q = 0: taxa de arfagem não gera força axial significativa
+#   - CX_wdot = 0: derivada de aceleração normal em CX desprezível
+# =============================================================================
+
+# --- 0.1 — Parâmetros geométricos construtivos (AXE FLY 2024) ---
+AR_w    = 5.15          # Alongamento da asa [-]
+e_w     = 0.89          # Fator de eficiência de Oswald da asa [-]
+iw      = np.deg2rad(6.0)  # Ângulo de incidência da asa [rad]
+
+S_EH    = 0.2662        # Área do estabilizador horizontal [m²]
+l_EH    = 1.124         # Distância CA-asa → CA-EH [m]
+AR_EH   = 5.05          # Alongamento do EH [-]
+e_EH    = 0.85          # Fator de eficiência de Oswald do EH [-]
+ih      = 0.0           # Ângulo de incidência do EH [rad]
+
+x_cg    = 0.43          # Posição do CG em fração de c̄ (bordo de ataque = 0)
+x_ca    = 0.25          # Posição do CA da asa em fração de c̄
+
+Cm_alpha_fus = 0.0012   # Contribuição da fuselagem a Cm_α [1/rad]
+
+eps0        = np.deg2rad(5.41)  # Downwash no trim (α = 0) [rad]
+deps_dalpha = 0.4202            # Gradiente de downwash dε/dα [-] (Helmbold/experimento)
+
+tau_e   = 0.8           # Eficiência do elevator: η_e = ∂α_EH/∂δe [-]
+
+CD0_geom = 0.0211       # Arrasto parasita "limpo" (teoria, sem interferência) [-]
+                        # NOTA: valor tabulated (0.0806) inclui interferência,
+                        # fricção em baixo Re e outros efeitos não modelados aqui.
+
+# --- 0.2 — Inclinações de CLα pela fórmula de Helmbold / Prandtl-Glauert ---
+# CLα = a₀ / (β + a₀/(π·e·AR))   onde β = √(1 − M²), a₀ = 2π (perfil 2D)
+# Válida para AR·β/κ < 4 (κ = correção de espessura ≈ 1); aqui AR·β ≈ 5.15.
+M_trim     = V0 / 340.0          # Mach de trim (velocidade do som ao nível do mar)
+beta_pg    = np.sqrt(max(1.0 - M_trim**2, 0.01))   # fator Prandtl-Glauert
+a0         = 2.0 * np.pi         # CLα do perfil 2D [1/rad]
+
+CLaw  = a0 / (beta_pg + a0 / (np.pi * e_w  * AR_w))   # asa [1/rad]
+CLaEH = a0 / (beta_pg + a0 / (np.pi * e_EH * AR_EH))  # EH  [1/rad]
+
+# --- 0.3 — Volume do estabilizador horizontal ---
+# VH = l_EH · S_EH / (c̄ · S)  [adimensional]
+VH = l_EH * S_EH / (c * S)
+
+# --- 0.4 — Derivativos de momento (Cm_α por componente) ---
+# Contribuição da asa: Cm_α_asa = CLα_w · (x_cg − x_ca)
+#   Positivo se CG à frente do CA → desestabilizador (soma positiva)
+Cm_alpha_asa = CLaw * (x_cg - x_ca)
+
+# Contribuição do EH: Cm_α_EH = −CLα_EH · VH · (1 − dε/dα)
+#   Sempre negativa (estabilizadora); atenuada pelo gradiente de downwash
+Cm_alpha_EH  = -CLaEH * VH * (1.0 - deps_dalpha)
+
+# Cm_α total: soma das três contribuições
+Cm_alpha_tot = Cm_alpha_asa + Cm_alpha_fus + Cm_alpha_EH  # [1/rad]
+
+# Ponto neutro e margem estática (SM)
+#   x_np/c̄ = x_ca − (Cm_α_fus + Cm_α_EH) / CLα_w
+x_np = x_ca - (Cm_alpha_fus + Cm_alpha_EH) / CLaw    # [fração de c̄]
+SM   = x_np - x_cg                                    # [fração de c̄]  (+) = estável
+
+# --- 0.5 — CLα total da aeronave ---
+# CLα_total inclui asa e contribuição do EH descontada do downwash
+CLa_total = CLaw + CLaEH * (S_EH / S) * (1.0 - deps_dalpha)   # [1/rad]
+
+# --- 0.6 — Derivativos de força normal e axial (CZ_*, CX_*) ---
+# CZ_w: variação de CZ com perturbação w (≈ −CLα para αe pequeno)
+CZ_w_geom = -CLa_total    # [1/rad]  CZ_w = −CLα_total
+
+# CZ_u: variação de CZ com perturbação de velocidade (Lanchester: ≈ −2·CL_trim)
+CL_trim_geom = m * g * np.cos(alpha_e) / (q_dyn_e * S)   # CL de equilíbrio
+CZ_u_geom    = -2.0 * CL_trim_geom                         # [adimensional]
+
+# CX_u: variação de CX com perturbação de velocidade (≈ −2·CD_trim em subsônico)
+k_geom       = 1.0 / (np.pi * AR_w * e_w)          # fator de arrasto induzido
+CD_trim_geom = CD0_geom + k_geom * CL_trim_geom**2  # CD de equilíbrio
+CX_u_geom    = -2.0 * CD_trim_geom                   # [adimensional]
+
+# CX_w: variação de CX com perturbação w  (efeito de sustentação projetada em x)
+#   CX_w = CL_trim − 2·k·CL_trim·CLα_w  (Cook, Cap. 4)
+CX_w_geom    = CL_trim_geom - 2.0 * k_geom * CL_trim_geom * CLaw
+
+# --- 0.7 — Derivativos de controle do elevator ---
+# CZ_de: força normal gerada por deflexão de elevator
+#   CZ_de = −CLα_EH · (S_EH/S) · τ_e
+CZ_de_geom = -CLaEH * (S_EH / S) * tau_e    # [1/rad]
+
+# Cm_de: momento de arfagem gerado por elevator
+#   Cm_de = −CLα_EH · VH · τ_e
+Cm_de_geom = -CLaEH * VH * tau_e             # [1/rad]
+
+# CX_de ≈ 0 (força axial do elevator é desprezível para αe pequeno)
+CX_de_geom = 0.0
+
+# --- 0.8 — Derivativos de amortecimento em arfagem (Cm_q, CZ_q) ---
+# Quando q ≠ 0, o EH experimenta ΔαEH = q·l_EH/V₀
+# Cm_q = −2·CLα_EH·VH·(l_EH/c̄)    [amortecimento de arfagem]
+# CZ_q = −2·CLα_EH·(S_EH/S)·(l_EH/c̄)
+Cm_q_geom = -2.0 * CLaEH * VH * (l_EH / c)           # [1/rad]
+CZ_q_geom = -2.0 * CLaEH * (S_EH / S) * (l_EH / c)   # [1/rad]
+
+# --- 0.9 — Derivativos de atraso de downwash (Cm_wdot, CZ_wdot) ---
+# Quando ẇ ≠ 0, o downwash no EH se atrasa por Δt ≈ l_EH/V₀.
+# O EH opera com αEH defasado: ΔαEH_delay = (dε/dα)·(ẇ·l_EH/V₀)/(2V₀)·c̄
+# Cm_wdot = −CLα_EH·VH·(dε/dα)/2
+# CZ_wdot = −CLα_EH·(S_EH/S)·(dε/dα)/2
+Cm_wdot_geom = -CLaEH * VH         * deps_dalpha / 2.0   # [1/rad]
+CZ_wdot_geom = -CLaEH * (S_EH / S) * deps_dalpha / 2.0   # [1/rad]
+
+# --- 0.10 — Cm_u: derivativo de velocidade de momento ---
+# Em voo subsônico profundo (M << 1), ∂CD/∂M ≈ 0 e ∂CL/∂M ≈ 0,
+# portanto Cm_u ≈ 0 (ver Cook Cap. 4; efeito só relevante para M > 0.3).
+Cm_u_geom = 0.0
+
+# --- 0.11 — Print do Bloco 0 ---
+print("=" * 62)
+print("  BLOCO 0 — DERIVATIVOS CONSTRUTIVOS (Helmbold / downwash)")
+print("=" * 62)
+print(f"\n  Parâmetros geométricos:")
+print(f"    AR_w / e_w             : {AR_w} / {e_w}")
+print(f"    S_EH / l_EH            : {S_EH} m2 / {l_EH} m")
+print(f"    x_cg / x_ca (frac. c)  : {x_cg} / {x_ca}")
+print(f"    dε/dα (downwash grad.) : {deps_dalpha}")
+print(f"    τ_e  (efic. elevator)  : {tau_e}")
+print(f"    M de trim              : {M_trim:.4f}  (Prandtl-Glauert: β={beta_pg:.5f})")
+print(f"\n  CLα calculados:")
+print(f"    CLα da asa (Helmbold)  : {CLaw:.4f}  [1/rad]")
+print(f"    CLα do EH  (Helmbold)  : {CLaEH:.4f}  [1/rad]")
+print(f"    CLα total aeronave     : {CLa_total:.4f}  [1/rad]")
+print(f"    Volume EH (VH)         : {VH:.4f}")
+print(f"\n  Estabilidade estática de arfagem:")
+print(f"    Cm_α da asa            : {Cm_alpha_asa:+.5f}  [1/rad]")
+print(f"    Cm_α da fuselagem      : {Cm_alpha_fus:+.5f}  [1/rad]")
+print(f"    Cm_α do EH             : {Cm_alpha_EH:+.5f}  [1/rad]")
+print(f"    Cm_α TOTAL             : {Cm_alpha_tot:+.5f}  [1/rad]  ({'ESTAVEL' if Cm_alpha_tot < 0 else 'INSTAVEL'})")
+print(f"    Ponto Neutro (x_np/c)  : {x_np:+.4f}")
+print(f"    Margem Estática (SM)   : {SM*100:+.2f}%  ({'estavel' if SM > 0 else 'instavel'})")
+print(f"\n  Derivativos adimensionais calculados:")
+print(f"    CX_u = {CX_u_geom:+.4f}   CX_w = {CX_w_geom:+.4f}   CX_de = {CX_de_geom:+.4f}")
+print(f"    CZ_u = {CZ_u_geom:+.4f}   CZ_w = {CZ_w_geom:+.4f}   CZ_q  = {CZ_q_geom:+.4f}")
+print(f"    CZ_wdot = {CZ_wdot_geom:+.5f}             CZ_de = {CZ_de_geom:+.4f}")
+print(f"    Cm_u = {Cm_u_geom:+.4f}   Cm_w = {Cm_alpha_tot:+.4f}   Cm_q  = {Cm_q_geom:+.4f}")
+print(f"    Cm_wdot = {Cm_wdot_geom:+.5f}             Cm_de = {Cm_de_geom:+.4f}")
+print(f"    CD0 = {CD0_geom:.4f}   k = {k_geom:.4f}   CL_trim = {CL_trim_geom:.4f}")
+print("=" * 62)
+
 # --- Derivadas adimensionais de estabilidade longitudinal ---
+# Calculadas no Bloco 0 a partir de parâmetros geométricos construtivos.
 # Convenção Cook / Bryan: perturbações normalizadas por V₀ (eixo de corpo).
 # Os termos "_wdot" usam normalização adicional por c/(2V₀) (ver Bloco 4).
-CX_u     =  0.0076
-CX_w     =  0.0483
-CX_wdot  =  0.0       # geralmente negligenciável; incluído por completeza
-CX_q     =  0.0
-CX_de    =  0.0618    # deltae = elevator
+CX_u    = CX_u_geom
+CX_w    = CX_w_geom
+CX_wdot = 0.0            # desprezível (contribuição de ordem superior)
+CX_q    = 0.0            # taxa de arfagem não gera força axial significativa
+CX_de   = CX_de_geom
 
-CZ_u     = -0.7273
-CZ_w     = -3.1245
-CZ_wdot  = -0.3997    # efeito de aceleração normal (Madelung)
-CZ_q     = -1.2109
-CZ_de    = -0.3741
+CZ_u    = CZ_u_geom
+CZ_w    = CZ_w_geom
+CZ_wdot = CZ_wdot_geom
+CZ_q    = CZ_q_geom
+CZ_de   = CZ_de_geom
 
-Cm_u     =  0.0340
-Cm_w     = -0.2169
-Cm_wdot  = -0.5910    # amortecimento por aceleração normal (Madelung)
-Cm_q     = -1.2732
-Cm_de    = -0.5581
+Cm_u    = Cm_u_geom      # = 0 (justificado em subsônico profundo, M=0.035)
+Cm_w    = Cm_alpha_tot   # = Cm_α total da aeronave [1/rad]
+Cm_wdot = Cm_wdot_geom
+Cm_q    = Cm_q_geom
+Cm_de   = Cm_de_geom
 
 # --- Polar de arrasto e condição de trim ---
-CD0  = 0.0806    # Coeficiente de arrasto parasita
-k    = 0.0706    # Fator de arrasto induzido  k = 1/(π.AR.e)
-CL_alpha = -CZ_w   # Derivada CLα ≈ -CZ_w [1/rad] (eixo de estabilidade ≈ corpo p/ αe pequeno)
+CD0      = CD0_geom      # Coef. de arrasto parasita (valor "limpo", Bloco 0)
+k        = k_geom        # Fator de arrasto induzido k = 1/(π·AR·e)
 
 # CL de equilíbrio a partir do equilíbrio de força normal:
 #   Z_aero_trim = -m·g·cos(θe)   →   CL_e·cos(αe) + CD_e·sin(αe) = m·g·cos(αe)/(q_e·S)
