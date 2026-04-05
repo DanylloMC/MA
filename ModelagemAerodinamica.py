@@ -704,6 +704,375 @@ plt.savefig('simulacao_temporal.png', dpi=150)
 plt.show()
 
 # =============================================================================
+# BLOCO 6b — TESTE DE SUPERPOSIÇÃO E ANÁLISE DE LINEARIDADE
+#
+# PREMISSA TEÓRICA (Cook, Cap. 4):
+#   O modelo de pequenas perturbações é VÁLIDO somente se o princípio de
+#   superposição for verificado: para um sistema linear,
+#
+#     y(2·δe) = 2 · y(δe)      [superposição de amplitude]
+#
+#   Método aplicado:
+#     (1) Simula a resposta NL ao degrau base   δe₁ = +de₁ deg
+#     (2) Simula a resposta NL ao degrau duplo  δe₂ = +de₂ deg  (de₂ = 2×de₁)
+#     (3) Calcula a previsão LINEAR: y_lin_pred = 2 × y_NL(δe₁)
+#     (4) Compara y_NL(δe₂) vs y_lin_pred → desvio = não-linearidade
+#
+#   Índice de Não-Linearidade (INL) por variável:
+#     INL_var = RMS[y_NL(2δe) − 2·y_NL(δe)] / RMS[2·y_NL(δe)] × 100%
+#
+#   INL < 5%  → regime essencialmente linear (modelo perturbativo válido)
+#   INL 5–15% → não-linearidade moderada (usar com cautela)
+#   INL > 15% → regime fortemente não-linear (modelo linear inadequado)
+# =============================================================================
+
+print("\n" + "=" * 62)
+print("  BLOCO 6b — TESTE DE SUPERPOSIÇÃO (ANÁLISE DE LINEARIDADE)")
+print("=" * 62)
+
+de1_deg = 2.0                     # amplitude base [deg]
+de2_deg = 2.0 * de1_deg           # amplitude dupla [deg]
+de1_rad = np.deg2rad(de1_deg)
+de2_rad = np.deg2rad(de2_deg)
+t_super = np.linspace(0, 8.0, 2000)    # 8 s — SP settle (3.3s) + início do fugóide
+# NOTA: janela curta é necessária porque o fugóide é INSTÁVEL (ζ<0).
+# Com 30 s, o crescimento exponencial do fugóide (T_dobra=26 s) inflacionaria
+# artificialmente o INL mesmo para sistemas quase-lineares.
+x0_super = [U_trim, W_trim, 0.0, theta_trim]
+
+# --- (1) Simulação NL com degrau base de₁ ---
+def ode_de1(t, s): return longitudinal_nonlinear(t, s, delta_e_trim + de1_rad, T_trim)
+sol_de1 = solve_ivp(ode_de1, [0, 8], x0_super, t_eval=t_super,
+                    method='RK45', rtol=1e-9, atol=1e-11)
+
+U1, W1, q1, th1 = sol_de1.y
+u1 = U1 - U_trim;   w1 = W1 - W_trim
+alpha1 = np.arctan2(W1, U1) - alpha_trim
+gamma1 = th1 - np.arctan2(W1, U1)   # ângulo de trajetória
+
+# --- (2) Simulação NL com degrau duplo de₂ = 2×de₁ ---
+def ode_de2(t, s): return longitudinal_nonlinear(t, s, delta_e_trim + de2_rad, T_trim)
+sol_de2 = solve_ivp(ode_de2, [0, 8], x0_super, t_eval=t_super,
+                    method='RK45', rtol=1e-9, atol=1e-11)
+
+U2, W2, q2, th2 = sol_de2.y
+u2 = U2 - U_trim;   w2 = W2 - W_trim
+alpha2 = np.arctan2(W2, U2) - alpha_trim
+gamma2 = th2 - np.arctan2(W2, U2)
+
+# --- (3) Previsão LINEAR: 2 × resposta ao degrau base ---
+u_pred   = 2.0 * u1
+w_pred   = 2.0 * w1
+alpha_pred = 2.0 * alpha1
+q_pred   = 2.0 * q1
+th_pred  = 2.0 * (th1 - theta_trim)
+gamma_pred = 2.0 * gamma1
+
+# --- (4) Índice de Não-Linearidade (INL) por variável ---
+def INL(real, pred):
+    """RMS do erro relativo ao RMS da previsão linear [%]."""
+    err   = real - pred
+    ref   = pred
+    rms_e = np.sqrt(np.mean(err**2))
+    rms_r = np.sqrt(np.mean(ref**2))
+    return (rms_e / (rms_r + 1e-12)) * 100.0
+
+inl_u     = INL(u2,      u_pred)
+inl_w     = INL(w2,      w_pred)
+inl_alpha = INL(alpha2,  alpha_pred)
+inl_q     = INL(q2,      q_pred)
+inl_th    = INL(th2 - theta_trim, th_pred)
+inl_gamma = INL(gamma2, gamma_pred)
+inl_medio = np.mean([inl_u, inl_w, inl_alpha, inl_q, inl_th])
+
+print(f"\n  Entradas testadas:")
+print(f"    Degrau base  (de1) = {de1_deg:.1f} deg")
+print(f"    Degrau duplo (de2) = {de2_deg:.1f} deg  (= 2 × de1)")
+print(f"\n  Índice de Não-Linearidade (INL) por variável:")
+print(f"    Δu     : {inl_u:.2f}%")
+print(f"    Δw     : {inl_w:.2f}%")
+print(f"    Δalpha : {inl_alpha:.2f}%")
+print(f"    q      : {inl_q:.2f}%")
+print(f"    Δtheta : {inl_th:.2f}%")
+print(f"    INL médio: {inl_medio:.2f}%")
+
+if inl_medio < 5.0:
+    regime = "LINEAR (INL < 5%) — modelo perturbativo VÁLIDO para esta amplitude"
+elif inl_medio < 15.0:
+    regime = "MODERADAMENTE NÃO-LINEAR (5% < INL < 15%) — usar com cautela"
+else:
+    regime = "FORTEMENTE NÃO-LINEAR (INL > 15%) — modelo linear INADEQUADO"
+print(f"\n  Regime identificado: {regime}")
+print(f"\n  NOTA: A não-linearidade capturada provém das EOM (termos U×q, W×q e")
+print(f"  sin/cos(θ)), não da aerodinâmica (que é linear por construção neste modelo).")
+print(f"  A janela de 8 s inclui o início da oscilação do fugóide (T_ph=8.8 s),")
+print(f"  cujo crescimento instável amplifica qualquer desvio entre as trajetórias.")
+print("=" * 62)
+
+# --- Figura 4: Teste de Superposição ---
+fig4, axes4 = plt.subplots(2, 3, figsize=(16, 9))
+fig4.suptitle(
+    f'Teste de Superposição — Análise de Linearidade\n'
+    f'Degrau base: {de1_deg:.0f}°  |  Degrau duplo: {de2_deg:.0f}°  '
+    f'|  INL médio = {inl_medio:.1f}%',
+    fontsize=13)
+
+estilos = [
+    (np.rad2deg(alpha2), np.rad2deg(alpha_pred), 'Δα [°]',    'Ângulo de Ataque',    axes4[0,0], inl_alpha),
+    (np.rad2deg(q2),     np.rad2deg(q_pred),     'q [°/s]',   'Taxa de Arfagem',     axes4[0,1], inl_q),
+    (np.rad2deg(th2-theta_trim), np.rad2deg(th_pred), 'Δθ [°]', 'Ângulo de Arfagem', axes4[0,2], inl_th),
+    (u2,                 u_pred,                 'Δu [m/s]',  'Vel. Axial',          axes4[1,0], inl_u),
+    (w2,                 w_pred,                 'Δw [m/s]',  'Vel. Normal',         axes4[1,1], inl_w),
+    (np.rad2deg(gamma2), np.rad2deg(gamma_pred), 'γ [°]',     'Ângulo de Trajetória',axes4[1,2], inl_gamma),
+]
+
+for real_data, pred_data, ylabel, title, ax, inl_val in estilos:
+    ax.plot(t_super, real_data,  color='crimson',  lw=2,
+            label=f'NL real  ({de2_deg:.0f}°)')
+    ax.plot(t_super, pred_data,  color='navy', lw=2, ls='--',
+            label=f'Prev. linear (2 × {de1_deg:.0f}°)')
+
+    # Área de erro entre as curvas
+    ax.fill_between(t_super, real_data, pred_data, alpha=0.15, color='orange',
+                    label=f'Erro | INL={inl_val:.1f}%')
+    ax.axhline(0, color='k', lw=0.6, alpha=0.4)
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.set_xlabel('t [s]', fontsize=10)
+    ax.set_title(f'{title}\nINL = {inl_val:.1f}%', fontsize=10)
+    ax.legend(fontsize=8, loc='upper right')
+    ax.grid(True, alpha=0.35)
+
+plt.tight_layout()
+plt.savefig('superposicao_linearidade.png', dpi=150)
+plt.show()
+
+# =============================================================================
+# BLOCO 6c — RETRATO DE FASE (α × q)
+#
+# O retrato de fase no plano (Δα, q) exibe as trajetórias do estado para
+# diferentes condições iniciais, sem entrada de controle (δe = δe_trim).
+#
+# INTERPRETAÇÃO (Cook, Cap. 6 / Teoria de Sistemas Dinâmicos):
+#   - Trajetórias ESPIRAIS convergentes → modo SP estável + amortecido
+#   - Trajetórias que CONVERGEM sem oscilar → SP overdamped (ζ = 1)
+#   - Ponto de equilíbrio no centro → trim (Δα=0, q=0)
+#   - Trajetórias que se AFASTAM → instabilidade
+#   - Separatrizes → fronteiras de bacia de atração (não-linearidade)
+#
+# PREMISSA: δe fixo no valor de trim; perturbação inicial apenas em Δα.
+# =============================================================================
+
+print("\n" + "=" * 62)
+print("  BLOCO 6c — RETRATO DE FASE (Δα × q)")
+print("=" * 62)
+
+alpha_ics_deg = [-8, -5, -3, -1, 0, 1, 3, 5, 8]   # perturbações em α [°]
+t_fase = np.linspace(0, 20.0, 2000)
+cores_fase = plt.cm.RdYlGn(np.linspace(0.1, 0.9, len(alpha_ics_deg)))
+
+fig5, (ax_fase, ax_fase_zoom) = plt.subplots(1, 2, figsize=(14, 7))
+fig5.suptitle(
+    'Retrato de Fase — Dinâmica Longitudinal\n'
+    'Plano (Δα, q) | δe fixo no trim | Múltiplas condições iniciais',
+    fontsize=13)
+
+for i, da_deg in enumerate(alpha_ics_deg):
+    da = np.deg2rad(da_deg)
+    alpha_ic = alpha_trim + da
+    U_ic = V0 * np.cos(alpha_ic)
+    W_ic = V0 * np.sin(alpha_ic)
+    x_ic = [U_ic, W_ic, 0.0, theta_trim]
+
+    sol_f = solve_ivp(
+        lambda t, s: longitudinal_nonlinear(t, s, delta_e_trim, T_trim),
+        [0, 20], x_ic, t_eval=t_fase,
+        method='RK45', rtol=1e-9, atol=1e-11)
+
+    if not sol_f.success:
+        continue
+
+    alpha_f = np.arctan2(sol_f.y[1], sol_f.y[0]) - alpha_trim
+    q_f     = sol_f.y[2]
+
+    lbl = f'Δα={da_deg:+d}°' if da_deg != 0 else 'Trim (Δα=0)'
+    for ax in (ax_fase, ax_fase_zoom):
+        ax.plot(np.rad2deg(alpha_f), np.rad2deg(q_f),
+                color=cores_fase[i], lw=1.6, label=lbl)
+        # Ponto inicial
+        ax.plot(np.rad2deg(alpha_f[0]), np.rad2deg(q_f[0]),
+                'o', color=cores_fase[i], ms=6)
+        # Seta de direção no meio da trajetória
+        mid = len(alpha_f) // 4
+        dax = np.rad2deg(alpha_f[mid+1] - alpha_f[mid-1])
+        dqx = np.rad2deg(q_f[mid+1] - q_f[mid-1])
+        ax.annotate('', xy=(np.rad2deg(alpha_f[mid]) + dax*0.3,
+                             np.rad2deg(q_f[mid]) + dqx*0.3),
+                    xytext=(np.rad2deg(alpha_f[mid]),
+                             np.rad2deg(q_f[mid])),
+                    arrowprops=dict(arrowstyle='->', color=cores_fase[i],
+                                   lw=1.2))
+
+# Ponto de equilíbrio
+for ax in (ax_fase, ax_fase_zoom):
+    ax.plot(0, 0, 'k*', ms=14, zorder=10, label='Equilíbrio (trim)')
+    ax.axhline(0, color='k', lw=0.6, alpha=0.4)
+    ax.axvline(0, color='k', lw=0.6, alpha=0.4)
+    ax.set_xlabel('Δα [°]', fontsize=11)
+    ax.set_ylabel('q [°/s]', fontsize=11)
+    ax.grid(True, alpha=0.35)
+
+ax_fase.set_title('Visão Completa (grandes perturbações)', fontsize=11)
+ax_fase.legend(fontsize=8, loc='upper right', ncol=2)
+
+ax_fase_zoom.set_xlim(-4, 4)
+ax_fase_zoom.set_ylim(-8, 8)
+ax_fase_zoom.set_title('Zoom (pequenas perturbações — regime linear)', fontsize=11)
+ax_fase_zoom.legend(fontsize=8, loc='upper right', ncol=2)
+
+plt.tight_layout()
+plt.savefig('retrato_fase.png', dpi=150)
+plt.show()
+
+print(f"  Condições iniciais: Δα ∈ {alpha_ics_deg}°")
+print(f"  Duração: 20 s por trajetória")
+print(f"  SP overdamped → trajetórias convergem sem oscilar")
+print("=" * 62)
+
+# =============================================================================
+# BLOCO 6d — EXCITAÇÃO DIRETA DOS MODOS LONGITUDINAIS
+#
+# Objetivo: verificar experimentalmente (via simulação) a existência e
+# frequência dos modos SP e Fugóide através de perturbações específicas.
+#
+# MÉTODO (Cook, Cap. 6):
+#   - Modo FUGÓIDE: perturbação em velocidade axial ΔU (mantendo W, q, θ)
+#     → excita preferencialmente a troca energia cinética/potencial
+#     → frequência esperada: ωn_ph ≈ g√2/V₀
+#
+#   - Modo PERÍODO CURTO: perturbação em velocidade normal ΔW (mantendo U, q, θ)
+#     → excita preferencialmente a rotação rápida em torno do CG
+#     → frequência esperada: ωn_sp (determinada pelos autovalores)
+#
+# NOTA: para SP overdamped (ζ=1), não haverá oscilação — a resposta
+# decairá exponencialmente (confirma os dois polos reais).
+# =============================================================================
+
+print("\n" + "=" * 62)
+print("  BLOCO 6d — EXCITAÇÃO DIRETA DOS MODOS LONGITUDINAIS")
+print("=" * 62)
+
+DeltaU_ph = 1.0    # perturbação em U para excitar fugóide [m/s]  (~8% de V₀)
+DeltaW_sp = 0.5    # perturbação em W para excitar SP [m/s] (~4% de V₀)
+
+t_modal = np.linspace(0, 60.0, 6000)   # 60 s: captura fugóide completo
+
+# --- Excitação do Fugóide: ΔU ---
+x_ph_ic = [U_trim + DeltaU_ph, W_trim, 0.0, theta_trim]
+sol_ph = solve_ivp(
+    lambda t, s: longitudinal_nonlinear(t, s, delta_e_trim, T_trim),
+    [0, 60], x_ph_ic, t_eval=t_modal,
+    method='RK45', rtol=1e-9, atol=1e-11)
+
+U_ph = sol_ph.y[0];  W_ph = sol_ph.y[1]
+V_ph = np.sqrt(U_ph**2 + W_ph**2) - V0          # ΔV [m/s]
+th_ph = np.rad2deg(sol_ph.y[3] - theta_trim)     # Δθ [°]
+alpha_ph = np.rad2deg(np.arctan2(W_ph, U_ph) - alpha_trim)
+
+# --- Excitação do SP: ΔW ---
+x_sp_ic = [U_trim, W_trim + DeltaW_sp, 0.0, theta_trim]
+sol_sp = solve_ivp(
+    lambda t, s: longitudinal_nonlinear(t, s, delta_e_trim, T_trim),
+    [0, 60], x_sp_ic, t_eval=t_modal,
+    method='RK45', rtol=1e-9, atol=1e-11)
+
+U_sp = sol_sp.y[0];  W_sp = sol_sp.y[1]
+V_sp = np.sqrt(U_sp**2 + W_sp**2) - V0
+alpha_sp = np.rad2deg(np.arctan2(W_sp, U_sp) - alpha_trim)
+q_sp = np.rad2deg(sol_sp.y[2])
+
+# O período do fugóide é obtido rigorosamente dos autovalores (Bloco 5).
+# A medição por zero-crossings na simulação NL é imprecisa para este sistema
+# porque: (a) a IC ΔU excita tanto SP quanto fugóide; (b) o fugóide é instável
+# (crescimento exponencial altera a forma dos cruzamentos); (c) Δθ começa em 0
+# (modo seno), então os cruzamentos ocorrem a cada T completo, não a T/2.
+# Portanto, usa-se o resultado analítico do Bloco 5:
+T_ph_meas = T_ph          # período teórico [s]  (= 2π/ωd_ph)
+omega_ph_meas = wn_ph     # ωn_ph do autovalor [rad/s]
+
+print(f"\n  Perturbação para Fugóide  : ΔU = +{DeltaU_ph:.1f} m/s ({DeltaU_ph/V0*100:.0f}% de V₀)")
+print(f"  Perturbação para SP       : ΔW = +{DeltaW_sp:.1f} m/s ({DeltaW_sp/V0*100:.0f}% de V₀)")
+print(f"\n  Período do fugóide (eigenvalue) : {T_ph_meas:.2f} s")
+print(f"  ωn_ph  (eigenvalue)             : {omega_ph_meas:.4f} rad/s")
+print(f"  (Medição por cruzamentos de zero não usada — IC seno + fugóide instável")
+print(f"\n  SP: overdamped (ζ=1) — sem oscilação esperada, apenas decaimento")
+print(f"  τ_SP1 = {tau_sp:.3f} s,  τ_SP2 = {tau_sp2:.3f} s")
+print("=" * 62)
+
+# --- Figura 6: Excitação Modal ---
+fig6, axes6 = plt.subplots(2, 3, figsize=(16, 9))
+fig6.suptitle('Excitação Direta dos Modos Longitudinais\n'
+              'Sem controle (δe = trim) — resposta livre', fontsize=13)
+
+# --- Fugóide (linha superior) ---
+axes6[0, 0].plot(t_modal, V_ph, color='steelblue', lw=2)
+axes6[0, 0].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[0, 0].set(ylabel='ΔV [m/s]', title=f'Fugóide — ΔV\n(T = {T_ph_meas:.1f} s, instável ζ={zeta_ph:.3f})')
+axes6[0, 0].grid(True, alpha=0.35)
+
+axes6[0, 1].plot(t_modal, th_ph, color='steelblue', lw=2)
+axes6[0, 1].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[0, 1].set(ylabel='Δθ [°]', title='Fugóide — Ângulo de Arfagem')
+axes6[0, 1].grid(True, alpha=0.35)
+
+axes6[0, 2].plot(t_modal, alpha_ph, color='steelblue', lw=2)
+axes6[0, 2].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[0, 2].set(ylabel='Δα [°]', title='Fugóide — Ângulo de Ataque')
+axes6[0, 2].grid(True, alpha=0.35)
+# Anotação: fugóide = quase α constante, V e θ oscilam
+axes6[0, 2].text(0.05, 0.85,
+    'Fugóide: α ≈ const.\nV e θ oscilam em antifase',
+    transform=axes6[0, 2].transAxes, fontsize=9,
+    bbox=dict(fc='lightyellow', alpha=0.8))
+
+# --- Período Curto (linha inferior) ---
+t_sp_zoom = 5.0   # zoom nos primeiros 5 s para ver SP
+mask_sp = t_modal <= t_sp_zoom
+
+axes6[1, 0].plot(t_modal[mask_sp], alpha_sp[mask_sp], color='darkorange', lw=2)
+axes6[1, 0].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[1, 0].set(xlabel='t [s]', ylabel='Δα [°]',
+                title=f'SP — Δα (zoom 0–{t_sp_zoom:.0f} s)\nτ₁={tau_sp:.2f}s, τ₂={tau_sp2:.2f}s')
+axes6[1, 0].grid(True, alpha=0.35)
+
+axes6[1, 1].plot(t_modal[mask_sp], q_sp[mask_sp], color='darkorange', lw=2)
+axes6[1, 1].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[1, 1].set(xlabel='t [s]', ylabel='q [°/s]',
+                title='SP — Taxa de Arfagem q')
+axes6[1, 1].grid(True, alpha=0.35)
+
+axes6[1, 2].plot(t_modal[mask_sp], V_sp[mask_sp], color='darkorange', lw=2)
+axes6[1, 2].axhline(0, ls='--', color='gray', lw=0.8)
+axes6[1, 2].set(xlabel='t [s]', ylabel='ΔV [m/s]',
+                title='SP — Velocidade Total')
+axes6[1, 2].grid(True, alpha=0.35)
+axes6[1, 2].text(0.05, 0.85,
+    'SP overdamped: decaimento\nexponencial (sem oscilação)',
+    transform=axes6[1, 2].transAxes, fontsize=9,
+    bbox=dict(fc='lightyellow', alpha=0.8))
+
+# Rótulos de linha
+for col in range(3):
+    axes6[0, col].set_xlabel('t [s]')
+    axes6[0, col].annotate('IC: ΔU=+1 m/s', xy=(0.02, 0.05),
+        xycoords='axes fraction', fontsize=8, color='steelblue')
+    axes6[1, col].annotate('IC: ΔW=+0.5 m/s', xy=(0.02, 0.05),
+        xycoords='axes fraction', fontsize=8, color='darkorange')
+
+plt.tight_layout()
+plt.savefig('excitacao_modal.png', dpi=150)
+plt.show()
+
+# =============================================================================
 # BLOCO 7 — FUNÇÕES DE TRANSFERÊNCIA E ANÁLISE DE FREQUÊNCIA (Cook, Cap. 5)
 #
 # Aplicando a transformada de Laplace ao sistema linearizado:
@@ -806,7 +1175,10 @@ plt.savefig('bode_longitudinal.png', dpi=150)
 plt.show()
 
 print("\n  Arquivos gerados:")
-print("    mapa_polos.png")
-print("    simulacao_temporal.png")
-print("    bode_longitudinal.png")
+print("    mapa_polos.png              — Mapa de polos (visão geral + zoom)")
+print("    simulacao_temporal.png      — Resposta ao degrau NL vs Linear")
+print("    superposicao_linearidade.png — Teste de superposição / INL")
+print("    retrato_fase.png            — Retrato de fase (Δα × q)")
+print("    excitacao_modal.png         — Excitação direta dos modos")
+print("    bode_longitudinal.png       — Diagramas de Bode θ/δe e q/δe")
 print("\n  Análise concluída.")
