@@ -508,42 +508,98 @@ if zeta_ph < 0:
     print(f"           A aprox. de Lanchester assume Cm_u = 0 e nao prevê essa instabilidade.")
 print("=" * 62)
 
-# --- Figura 1: Mapa de Polos ---
-fig1, ax1 = plt.subplots(figsize=(8, 6))
-for lam in eigenvalues:
-    ax1.plot(lam.real, lam.imag, 'kx', markersize=10, markeredgewidth=2)
-ax1.axvline(0, color='k', linewidth=0.8, linestyle='--')
-ax1.axhline(0, color='k', linewidth=0.8, linestyle='--')
+# --- Figura 1: Mapa de Polos (dois painéis) ---
+# Painel esquerdo : visão geral com todos os polos
+# Painel direito  : zoom na região de baixa frequência (fugóide + SP-2)
+# Isso evita que o polo SP-1 (muito à esquerda) comprima a escala e
+# torne os polos do fugóide invisíveis.
 
-# Arcos de amortecimento constante
-for zc in [0.1, 0.3, 0.5, 0.7]:
-    theta_arc = np.linspace(-np.pi/2, np.pi/2, 200)
-    r_arc = max(abs(eigenvalues)) * 1.3
-    xs = r_arc * (-zc * np.ones_like(theta_arc))
-    ys = r_arc * np.sin(np.arccos(zc)) * np.sign(theta_arc)
-    # círculo
-    ang = np.linspace(0, 2*np.pi, 300)
-    ax1.plot(-r_arc*zc*np.cos(ang)*0 - r_arc*np.sin(ang)*np.sin(np.arccos(zc)),
-             r_arc*np.cos(ang)*0, alpha=0)  # placeholder
+def _plot_poles_on_ax(ax, eigs, zoom=False):
+    """Plota polos, eixos, rótulos e arcos de amortecimento num eixo."""
+    cores = {'SP1': 'tab:blue', 'SP2': 'tab:cyan', 'PH': 'tab:red'}
 
-# Rotular modos
-for i, (lam, label) in enumerate(zip([lam_sp, lam_ph],
-                                      ['SP', 'Fugóide'])):
-    ax1.annotate(f'{label}\nomegan={abs(lam):.3f}\nzeta={-lam.real/abs(lam):.3f}',
-                 xy=(lam.real, lam.imag),
-                 xytext=(lam.real + 0.05*abs(lam), lam.imag + 0.1*abs(lam)),
-                 fontsize=10, ha='left',
-                 arrowprops=dict(arrowstyle='->', color='gray'))
-    # polo conjugado
-    ax1.annotate('', xy=(lam.real, -lam.imag),
-                 xytext=(lam.real, lam.imag),
-                 arrowprops=dict(arrowstyle='-', color='gray', linestyle='dotted'))
+    # Agrupa polos por modo
+    sp1 = eigenvalues[0]
+    sp2 = eigenvalues[1]
+    ph_p = eigenvalues[2]   # positivo Im
+    ph_m = eigenvalues[3]   # negativo Im (conjugado)
 
-ax1.set_xlabel('Re(λ) [rad/s]')
-ax1.set_ylabel('Im(λ) [rad/s]')
-ax1.set_title('Mapa de Polos — Dinâmica Longitudinal (Cook, Cap. 6)')
-ax1.grid(True)
-ax1.set_aspect('equal')
+    labels = [
+        (sp1, f'SP-1\n$\\lambda$={sp1.real:.2f}', cores['SP1']),
+        (sp2, f'SP-2\n$\\lambda$={sp2.real:.2f}', cores['SP2']),
+        (ph_p, f'Fugóide\n$\\lambda$={ph_p.real:+.3f}±{abs(ph_p.imag):.3f}j', cores['PH']),
+        (ph_m, None, cores['PH']),   # conjugado — sem label
+    ]
+
+    for lam, lbl, cor in labels:
+        marker = 'x' if lam.real < 0 else 'o'   # × estável, ○ instável
+        ms = 12 if not zoom else 14
+        ax.plot(lam.real, lam.imag, marker=marker, color=cor,
+                markersize=ms, markeredgewidth=2.5, zorder=5)
+        if lbl and (not zoom or abs(lam.real) < 5):
+            # No zoom, anota apenas polos visíveis (fugóide + SP-2)
+            offset_x = 0.06 if lam.imag >= 0 else 0.06
+            offset_y = 0.08 if lam.imag >= 0 else -0.12
+            ax.annotate(lbl,
+                        xy=(lam.real, lam.imag),
+                        xytext=(lam.real + offset_x, lam.imag + offset_y),
+                        fontsize=9, color=cor,
+                        arrowprops=dict(arrowstyle='->', color=cor, lw=1.2),
+                        bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7))
+
+    # Linha vertical em σ=0 (margem de estabilidade)
+    ax.axvline(0, color='k', linewidth=1.2, linestyle='--', alpha=0.6)
+    ax.axhline(0, color='k', linewidth=0.6, linestyle='-', alpha=0.3)
+    ax.grid(True, alpha=0.35, linestyle=':')
+    ax.set_xlabel('Re(λ)  [rad/s]', fontsize=11)
+    ax.set_ylabel('Im(λ)  [rad/s]', fontsize=11)
+
+    # Arcos de amortecimento constante (linhas radiais a partir da origem)
+    r_max = max(abs(eig) for eig in eigs) * 1.15
+    for zc in [0.3, 0.5, 0.7, 1.0]:
+        angle = np.arccos(zc)        # ângulo do eixo negativo real
+        for sign in [+1, -1]:
+            r_arr = np.linspace(0, r_max, 200)
+            ax.plot(-r_arr * zc, sign * r_arr * np.sin(angle),
+                    color='gray', linewidth=0.7, linestyle='--', alpha=0.45)
+        if not zoom:
+            # Rótulo do arco
+            rx = -r_max * zc * 0.85
+            ry =  r_max * np.sin(angle) * 0.85
+            ax.text(rx, ry, f'ζ={zc}', fontsize=7, color='gray', ha='center',
+                    rotation=np.rad2deg(-np.arctan2(np.sin(angle), zc)))
+
+
+fig1, (ax_full, ax_zoom) = plt.subplots(1, 2, figsize=(14, 6))
+fig1.suptitle('Mapa de Polos — Dinâmica Longitudinal (Cook, Cap. 6)', fontsize=13)
+
+# --- Painel esquerdo: todos os polos ---
+_plot_poles_on_ax(ax_full, eigenvalues, zoom=False)
+# Escala automática com margem
+r_all = max(abs(l) for l in eigenvalues)
+ax_full.set_xlim(-r_all * 1.25, r_all * 0.25)
+ax_full.set_ylim(-r_all * 0.15, r_all * 0.15)
+ax_full.set_title('Visão Geral (todos os polos)', fontsize=11)
+
+# Adiciona rótulo manual para SP-1 que ficou fora do zoom
+ax_full.annotate(f'SP-1: λ={lam_sp.real:.1f} s⁻¹\n(ζ=1, overdamped)',
+                 xy=(lam_sp.real, 0), xytext=(lam_sp.real + 2, r_all * 0.08),
+                 fontsize=9, color='tab:blue',
+                 arrowprops=dict(arrowstyle='->', color='tab:blue', lw=1.2),
+                 bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.8))
+
+# --- Painel direito: zoom na região de baixa frequência ---
+_plot_poles_on_ax(ax_zoom, eigenvalues, zoom=True)
+zoom_r = abs(lam_ph) * 2.8
+ax_zoom.set_xlim(-zoom_r, zoom_r * 0.6)
+ax_zoom.set_ylim(-zoom_r, zoom_r)
+ax_zoom.set_aspect('equal')
+ax_zoom.set_title('Zoom — Fugóide + SP-2', fontsize=11)
+
+# Marcação do instável (semiplano direito sombreado)
+ax_zoom.axvspan(0, zoom_r * 0.6, alpha=0.06, color='red', label='Instável (Re > 0)')
+ax_zoom.legend(loc='upper left', fontsize=9)
+
 plt.tight_layout()
 plt.savefig('mapa_polos.png', dpi=150)
 plt.show()

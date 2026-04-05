@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python ModelagemAerodinamica.py)",
-      "Bash(python -c \"import sys; sys.stdout.reconfigure\\(encoding='utf-8'\\); exec\\(open\\('ModelagemAerodinamica.py', encoding='utf-8'\\).read\\(\\)\\)\")"
+      "Bash(python -c \"import sys; sys.stdout.reconfigure\\(encoding='utf-8'\\); exec\\(open\\('ModelagemAerodinamica.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -c ':*)"
     ]
   }
 }
