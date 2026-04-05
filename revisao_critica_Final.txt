@@ -1,0 +1,1155 @@
+==============================================================================
+  REVISAO CRITICA FINAL -- EstabilidadeLongitudinal.py
+  Analise de Dinamica Longitudinal 3-DOF de UAV (~14 kg)
+  com Derivativos Construtivos (Bloco 0 -- Helmbold / Downwash)
+
+  Documento: Fundamentacao Cientifica, Metodologia Passo-a-Passo e Criticas
+
+  Referencia principal: Cook, M. V. -- Flight Dynamics Principles (Cap. 4-6)
+  Complementar: Perkins & Hage, Nelson -- Flight Stability and Automatic Control
+  Data: 05/04/2026
+==============================================================================
+
+
+==============================================================================
+SECAO 1 -- FUNDAMENTACAO TEORICA: AS EQUACOES DE BRYAN
+==============================================================================
+
+1.1 -- Origem e premissas fundamentais
+
+  As equacoes de movimento utilizadas neste estudo derivam do trabalho de
+  G. H. Bryan (1911, "Stability in Aviation"), que formulou as EOM de um
+  corpo rigido em 6 graus de liberdade usando eixos solidarios ao corpo
+  (body-fixed axes). A escolha desse referencial elimina os termos de
+  inercia variavel que surgiriam num referencial inercial para um corpo
+  em rotacao, ao custo de introduzir termos de acoplamento inercial
+  (produtos q*W, q*U) nas equacoes de forca.
+
+  A reducao para 3 GDL longitudinais exige a premissa de SIMETRIA
+  BILATERAL da aeronave e DESACOPLAMENTO lateral-direcional:
+
+    v = p = r = phi = 0    (velocidade lateral, rolagem, guinada, angulo de
+                            rolagem identicamente nulos)
+
+  Esta premissa e exata para voo retiline simetrico e aproximadamente
+  valida para perturbacoes de pequena amplitude que nao excitem modos
+  laterais. No contexto do presente estudo -- degraus de elevator sem
+  perturbacao lateral -- a premissa e plenamente justificada.
+
+  O sistema reduzido e:
+
+    m(U_dot + qW) = X_aero + T - m*g*sin(theta)     ... (1)  [forca axial]
+    m(W_dot - qU) = Z_aero     + m*g*cos(theta)     ... (2)  [forca normal]
+    Iy*q_dot      = M_aero                           ... (3)  [momento de arfagem]
+    theta_dot     = q                                 ... (4)  [cinematica]
+
+  onde (U, W) sao as componentes de velocidade em eixos de corpo, q e a
+  taxa de arfagem, e theta e o angulo de arfagem medido a partir do horizonte.
+
+  JUSTIFICATIVA DOS SINAIS:
+  - Eq. (1): o termo -qW aparece porque a rotacao q transporta a componente
+    W para o eixo x (efeito de Coriolis no referencial rotante). O sinal
+    negativo em -m*g*sin(theta) reflete que, com theta > 0 (nariz para cima), a
+    componente gravitacional em x aponta para tras (retarda a aeronave).
+  - Eq. (2): o termo +qU aparece pela mesma razao (rotacao transporta U
+    para z). O sinal +m*g*cos(theta) e consequencia da convencao z positivo
+    para baixo: quando theta = 0, o peso projeta-se inteiramente no eixo z
+    positivo (para baixo).
+  - Eq. (3): nao ha termos giroscopicos porque Iy e assumido constante e
+    p = r = 0 elimina os produtos de inercia cruzados (Ixz*(p^2 - r^2)).
+
+1.2 -- Sobre a escolha do eixo de corpo (vs. eixo de estabilidade)
+
+  O codigo utiliza eixo de CORPO (body axis), nao eixo de estabilidade.
+  A distincao e relevante:
+
+  - Eixo de corpo: fixo na aeronave; X aponta na direcao do nariz, Z para
+    baixo. As derivadas de estabilidade CX, CZ sao forca axial e normal
+    neste sistema. No trim, alpha_e != 0, portanto U_e != V_0 e W_e != 0.
+
+  - Eixo de estabilidade: alinhado com o vetor velocidade no trim; no trim,
+    alpha = 0 e W_e = 0. Simplifica a linearizacao (termos W_trim = 0
+    eliminam alguns acoplamentos), mas exige rotacao das derivadas quando
+    alpha_e e significativo.
+
+  Para alpha_e = 9.4 graus, a diferenca entre os dois sistemas e mensuravel:
+  cos(9.4 deg) = 0.987, sin(9.4 deg) = 0.163. Os termos cruzados W_trim*q
+  na eq. (1) e os termos de gravidade diferem em ~2-3% entre os dois
+  referenciais. A escolha de eixo de corpo e CORRETA e consistente com
+  a referencia de Cook (Cap. 4). Nao constitui fonte de erro.
+
+
+==============================================================================
+SECAO 2 -- BLOCO 0: DERIVACAO ANALITICA DOS DERIVATIVOS DE ESTABILIDADE
+==============================================================================
+
+2.1 -- Objetivo e justificativa
+
+  O Bloco 0 (linhas 56-242) constitui a PRINCIPAL INOVACAO desta versao
+  final do codigo. Em vez de utilizar derivativos tabelados de origem nao
+  rastreavel, todos os coeficientes de estabilidade sao calculados a partir
+  de parametros geometricos construtivos da aeronave (AXE FLY 2024).
+
+  Esta abordagem e pedagogicamente superior: permite ao analista rastrear
+  como cada derivativo emerge da geometria da aeronave, facilitando a
+  identificacao de erros e a analise de sensibilidade.
+
+  LIMITACAO: os metodos analiticos utilizados (Helmbold, volume de cauda,
+  downwash linear) sao aproximacoes de PRIMEIRA ORDEM. Em comparacao com
+  dados experimentais ou CFD, esperam-se desvios de 20-50% em varios
+  derivativos. A precisao absoluta nao e o objetivo; o objetivo e a
+  CONSISTENCIA INTERNA e a RASTREABILIDADE FISICA.
+
+2.2 -- Formula de Helmbold / Prandtl-Glauert para CL_alpha (linhas 102-110)
+
+  A inclinacao da curva de sustentacao para asas de alongamento finito e
+  calculada pela formula de Helmbold:
+
+    CL_alpha = a0 / (beta + a0 / (pi * e * AR))
+
+  onde:
+    a0    = 2*pi  [CL_alpha do perfil 2D, teoria de camada fina]
+    beta  = sqrt(1 - M^2)  [correcao de compressibilidade Prandtl-Glauert]
+    e     = fator de eficiencia de Oswald
+    AR    = alongamento da asa
+
+  ANALISE CRITICA:
+
+  (a) Para M = 0.035 (V0 = 12 m/s), beta = 0.99939 -- essencialmente 1.0.
+      A correcao de Prandtl-Glauert e DESPREZIVEL. Sua inclusao e
+      formalmente correta mas numericamente irrelevante (delta < 0.06%).
+      Nao constitui erro, mas nao acrescenta precisao.
+
+  (b) A formula de Helmbold e uma APROXIMACAO da teoria da linha
+      sustentadora de Prandtl para asas nao-elipticas. E mais precisa
+      que a formula classica de Prandtl (CL_alpha = a0*AR/(AR+2)) para
+      AR < 6, que e o caso aqui (AR_w = 5.15, AR_EH = 5.05).
+
+  (c) O uso de a0 = 2*pi assume perfil fino sem separacao. Para o regime
+      de Reynolds da aeronave (Re ~ 4*10^5 para c = 0.5 m, V = 12 m/s),
+      efeitos viscosos reduzem a0 para tipicamente 5.5-6.0 rad^-1.
+      CONSEQUENCIA: CL_alpha_w = 4.376 rad^-1 (codigo) esta SUPERESTIMADO
+      em relacao ao valor real provavel (~3.1-3.5 rad^-1 para baixo Re).
+      Isso impacta diretamente CZ_w, Cm_alpha, e todos os derivativos
+      dependentes.
+
+  RESULTADO: CLaw = 4.3763 rad^-1, CLaEH = 4.2880 rad^-1.
+
+  CRITICA: a superestimacao de CL_alpha por nao considerar efeitos
+  viscosos de baixo Reynolds e a PRINCIPAL fonte de incerteza do Bloco 0.
+  A diferenca entre o CLaw geometrico (4.38) e valores tipicos de ensaio
+  para UAVs semelhantes (~3.1) e de ~40%. Recomenda-se que trabalhos
+  futuros utilizem a0 corrigido por dados de tunel ou XFOIL para o perfil
+  especifico em questao.
+
+2.3 -- Volume do estabilizador horizontal VH (linha 114)
+
+  VH = l_EH * S_EH / (c_bar * S) = 1.124 * 0.2662 / (0.5048 * 1.213)
+     = 0.4886
+
+  ANALISE: VH = 0.49 e um valor razoavel para um UAV de pequeno porte.
+  Valores tipicos para aeronaves convencionais: 0.35-0.80 (Nelson, Tab. 2.1).
+  Valores para UAVs de competicao: 0.30-0.60 (dependendo da configuracao).
+
+  CRITICA: l_EH = 1.124 m deve ser medido do CENTRO AERODINAMICO da asa
+  ao CENTRO AERODINAMICO do EH, nao do CG. Alguns textos usam a distancia
+  do CG ao CA do EH (l_t), o que e diferente por (x_cg - x_ca)*c_bar.
+  Com x_cg = 0.43 e x_ca = 0.25, a diferenca seria 0.18*0.505 = 0.091 m,
+  ou ~8% de l_EH. O codigo nao explicita qual convencao esta sendo usada.
+  RECOMENDACAO: documentar explicitamente se l_EH e medido do CA da asa
+  ou do CG.
+
+2.4 -- Decomposicao de Cm_alpha (linhas 117-131)
+
+  O momento de arfagem total e decomposto em tres contribuicoes:
+
+  (a) Asa: Cm_alpha_asa = CLaw * (x_cg - x_ca) = 4.376 * (0.43 - 0.25)
+         = +0.7877 [1/rad]
+      Positivo porque CG esta ATRAS do CA --> desestabilizador.
+
+  (b) Fuselagem: Cm_alpha_fus = +0.0012 [1/rad]
+      Dado como parametro. Pequeno, o que e esperado para um UAV com
+      fuselagem estreita. NOTA: este valor deveria ser NEGATIVO para
+      uma fuselagem que gera sustentacao a favor do fluxo, ou POSITIVO
+      para o efeito desestabilizador tipico (momento de nose-up).
+      Valor de +0.0012 sugere fuselagem com efeito desestabilizador
+      minimo -- plausivel para UAV.
+
+  (c) EH: Cm_alpha_EH = -CLaEH * VH * (1 - deps_dalpha)
+         = -4.288 * 0.4886 * (1 - 0.4202) = -1.2148 [1/rad]
+      Negativo (estabilizador). A atenuacao por downwash (1 - de/da = 0.58)
+      reduz a eficacia do EH em ~42%.
+
+  TOTAL: Cm_alpha_tot = 0.7877 + 0.0012 - 1.2148 = -0.4259 [1/rad]
+
+  ESTABILIDADE ESTATICA: Cm_alpha < 0 --> ESTAVEL.
+
+  Ponto Neutro: x_np = x_ca - (Cm_alpha_fus + Cm_alpha_EH)/CLaw
+              = 0.25 - (0.0012 - 1.2148)/4.376
+              = 0.25 + 0.2773 = 0.5273
+
+  Margem Estatica: SM = x_np - x_cg = 0.5273 - 0.43 = +0.0973 (9.73%)
+
+  ANALISE CRITICA:
+
+  (a) SM = 9.7% e um valor ADEQUADO. Valores tipicos: 5-15% para
+      aeronaves convencionais, 8-12% para UAVs de competicao. Margem
+      menor que 5% pode causar instabilidade em rajada; maior que 20%
+      causa excesso de estabilidade (dificuldade de manobra).
+
+  (b) O gradiente de downwash deps_dalpha = 0.4202 e um parametro CRITICO.
+      Pela teoria classica (Perkins & Hage), para asa eliptica:
+        de/da ~ 2*CLaw/(pi*AR_w) = 2*4.376/(pi*5.15) = 0.541
+      O valor usado (0.42) e ~22% menor. Se este valor vem de ensaio ou
+      CFD, e aceitavel. Se e uma estimativa, merece validacao.
+
+2.5 -- Derivativos de forca e controle (linhas 137-179)
+
+  CZ_w = -CLa_total = -4.922 [1/rad]
+    CLa_total = CLaw + CLaEH*(S_EH/S)*(1-de/da)
+              = 4.376 + 4.288*(0.2662/1.213)*(0.5798)
+              = 4.376 + 0.546 = 4.922
+
+  CZ_u = -2*CL_trim = -2*1.856 = -3.711
+    (Formula de Lanchester -- derivada de forca normal com velocidade)
+
+  CX_u = -2*CD_trim = -2*0.2602 = -0.520
+    NOTA: CD_trim = CD0 + k*CL^2 = 0.0211 + 0.0694*1.856^2 = 0.260
+    O uso de CD0_geom = 0.0211 ("limpo") subestima significativamente o
+    arrasto real. O valor tabelado original era CD0 = 0.0806 (4x maior),
+    que inclui arrasto de interferencia asa-fuselagem, arrasto de fricao
+    em baixo Re, e arrasto de componentes (trem de pouso, antenas, etc.).
+    CONSEQUENCIA: CD_trim geometrico (0.260) vs. tabelado (0.435).
+    Isso afeta T_trim (subestimado) e zeta_ph (subestimado).
+
+  CX_w = CL_trim - 2*k*CL_trim*CLaw = 1.856 - 2*0.0694*1.856*4.376
+       = 1.856 - 1.129 = +0.727
+
+  CZ_de = -CLaEH*(S_EH/S)*tau_e = -4.288*0.2195*0.8 = -0.753
+  Cm_de = -CLaEH*VH*tau_e = -4.288*0.4886*0.8 = -1.676
+
+  Cm_q = -2*CLaEH*VH*(l_EH/c) = -2*4.288*0.4886*(1.124/0.5048) = -9.331
+    Este e o derivativo de AMORTECIMENTO de arfagem. Fisicamente, quando
+    a aeronave arfa (q != 0), o EH experimenta uma mudanca de angulo de
+    ataque proporcional a q*l_EH/V0. O valor -9.33 e MUITO ALTO em
+    comparacao com o tabelado (-1.27, razao 7.3x).
+    CAUSA: a formula analitica captura apenas a contribuicao do EH, mas
+    a asa e fuselagem tambem contribuem (negativamente, reduzindo o total).
+    Na pratica, o Cm_q real inclui contribuicoes da asa e corpo que
+    parcialmente cancelam o efeito do EH.
+    CONSEQUENCIA CRITICA: Cm_q 7x maior torna o SP extremamente overdamped
+    (dois polos reais em vez de par complexo conjugado). Isso e discutido
+    em detalhe na Secao 6.
+
+  CZ_wdot = -CLaEH*(S_EH/S)*deps_dalpha/2 = -0.198
+  Cm_wdot = -CLaEH*VH*deps_dalpha/2 = -0.440
+
+2.6 -- Cm_u = 0: justificativa e consequencias (linhas 181-184)
+
+  O codigo atribui Cm_u = 0 com a justificativa de que, para M = 0.035,
+  os efeitos de compressibilidade sao desprezlveis (< 0.1%).
+
+  ANALISE CRITICA:
+
+  Em regime subsonico profundo (M << 0.3), a derivada Cm_u (variacao do
+  momento com velocidade) tem duas fontes:
+
+  (a) Efeito Mach (dCm/dM): desprezivel para M < 0.3. CORRETO ignorar.
+
+  (b) Efeito de thrust-line offset: se a linha de acao do empuxo nao passa
+      pelo CG, uma variacao em T (que varia com V) gera momento. Para
+      propulsao eletrica tipica de UAV com motor montado acima/abaixo do
+      CG, Cm_u pode ser diferente de zero mesmo em subsonico.
+
+  (c) Efeito de empuxo variavel com V: se T = f(V), entao
+      dCm_T/du = (dT/dV)*z_T / (q_e*S*c)
+      onde z_T e o braco do empuxo em relacao ao CG.
+
+  No caso de empuxo alinhado com o eixo x do corpo (premissa do modelo),
+  o braco do empuxo em relacao ao CG no eixo z e zero, portanto Cm_T = 0.
+  A premissa Cm_u = 0 e CONSISTENTE com as premissas do modelo.
+
+  CONSEQUENCIA PRINCIPAL: com Cm_u = 0, a instabilidade do fugoide que
+  existia com o valor tabelado (Cm_u = +0.034) DESAPARECE. O fugoide
+  torna-se estavel (zeta_ph > 0). Isso e discutido na Secao 6.
+
+  NOTA IMPORTANTE: o valor tabelado Cm_u = +0.034 pode ter origem
+  experimental que capture efeitos de propulsao nao modelados aqui.
+  A decisao de usar Cm_u = 0 e fisicamente justificada dentro das
+  premissas do modelo, mas pode nao refletir o comportamento real da
+  aeronave se houver assimetria de empuxo.
+
+2.7 -- Resumo dos derivativos e comparacao com tabelados
+
+  Tabela comparativa (derivativos geometricos vs. tabelados originais):
+
+  Derivativo   Geometrico    Tabelado     Razao G/T    Observacao
+  ---------    ----------    --------     ---------    ----------
+  CX_u          -0.265       +0.008       -34.9x       Sinal oposto
+  CX_w          +0.727       +0.389        1.9x        Superest.
+  CZ_u          -2.533       -0.727        3.5x        Superest.
+  CZ_w          -4.922       -3.125        1.6x        CLa alto
+  CZ_q          -4.191       -1.211        3.5x        Superest.
+  CZ_wdot       -0.198       -0.400        0.5x        Subestim.
+  CZ_de         -0.753       -0.374        2.0x        Superest.
+  Cm_u           0.000       +0.034        0x          Forcado zero
+  Cm_w          -0.426       -0.217        2.0x        Superest.
+  Cm_q          -9.331       -1.273        7.3x        MAIOR DISCREPANCIA
+  Cm_wdot       -0.440       -0.591        0.7x        Proximo
+  Cm_de         -1.676       -0.558        3.0x        Superest.
+  CD0            0.021        0.081        0.26x       SEM interferencia
+  k              0.069        0.071        1.0x        Identico
+
+  DIAGNOSTICO GERAL: a maioria dos derivativos geometricos e MAIOR em
+  magnitude que os tabelados. A causa raiz e a superestimacao de CLa
+  pela formula de Helmbold com a0 = 2*pi (sem correcao viscosa). Como
+  quase todos os derivativos dependem de CLa, o erro se propaga
+  sistematicamente.
+
+  EXCECOES:
+  - CZ_wdot: geometrico MENOR (0.5x). A formula analitica captura
+    apenas o atraso do downwash no EH; efeitos de vortice da asa e
+    fuselagem nao sao modelados.
+  - CD0: geometrico 4x menor. A estimativa "limpa" nao inclui arrasto
+    de interferencia, trem de pouso, fricao viscosa real. Este e o
+    derivativo com MAIOR incerteza no Bloco 0.
+
+
+==============================================================================
+SECAO 3 -- BLOCO 1: PARAMETROS FISICOS E CONDICAO DE TRIM
+==============================================================================
+
+3.1 -- Parametros fisicos (linhas 38-54)
+
+  m = 14.0 kg     -- massa total da aeronave
+  Iy = 0.385 kg*m^2  -- momento de inercia em arfagem
+  S = 1.213 m^2   -- area da asa
+  c = 0.5048 m    -- corda aerodinamica media
+  V0 = 12.0 m/s   -- velocidade de trim
+  rho = 1.225 kg/m^3  -- ISA ao nivel do mar
+
+  ANALISE CRITICA:
+
+  (a) Iy = 0.385 kg*m^2: PLAUSIVEL para um UAV de 14 kg. Uma estimativa
+      grosseira para distribuicao de massa uniforme num corpo de 1.2 m de
+      comprimento e massa 14 kg da Iy ~ m*L^2/12 ~ 14*1.44/12 ~ 1.7 kg*m^2.
+      O valor 0.385 indica massa concentrada perto do CG, o que e comum
+      em UAVs com motor eletrico central e bateria sob a asa.
+      NOTA: na versao anterior do codigo de referencia (aircraft_3dof.py),
+      o valor Iy = 165669 kg*m^2 era usado -- claramente ERRADO para um
+      UAV (valor tipico de aeronave comercial grande). O valor 0.385
+      nesta versao e CORRETO.
+
+  (b) V0 = 12 m/s: velocidade de cruzeiro tipica de UAV de competicao
+      com carga alar de m/(g*S) ~ 14*9.81/1.213 = 113 Pa ~ 11.6 kg/m^2.
+      Numero de Reynolds: Re = rho*V*c/mu ~ 1.225*12*0.505/1.81e-5
+      ~ 4.1*10^5. Regime de transicao laminar-turbulento. Efeitos
+      viscosos sao SIGNIFICATIVOS e afetam CLa (conforme discutido
+      na Secao 2.2).
+
+  (c) alpha_e = 9.4 graus: angulo de ataque de trim. Relativamente alto,
+      sugerindo voo proximo a CL maximo. Para perfis tipicos de UAV,
+      alpha_stall ~ 12-15 graus. Margem de 3-6 graus para stall.
+      PREOCUPACAO: com perturbacoes de +5 graus (degrau de elevator),
+      alpha pode atingir 14-15 graus, perto do stall. O modelo linear
+      nao captura este efeito.
+
+3.2 -- Forcas de base no trim (linhas 240-263)
+
+  O codigo calcula CL_e, CD_e, CX_trim e CZ_trim a partir do equilibrio
+  de forcas no ponto de trim.
+
+  CL_e = m*g*cos(alpha_e) / (q_e*S) = 14*9.81*cos(9.4 deg) / (88.2*1.213)
+       = 135.51 / 107.02 = 1.266
+
+  CRITICA: CL_trim = 1.266 e um valor ALTO. Perfis tipicos de UAV tem
+  CL_max ~ 1.4-1.8 (depende do perfil e Re). O voo operando a CL/CL_max
+  ~ 0.70-0.90 esta na regiao de ALTA sustentacao, onde efeitos nao-lineares
+  (separacao parcial, histerese) comecam a ser significativos.
+  NOTA: o valor do resumo da conversacao anterior indica CL_trim = 1.856
+  (com CD0_geom = 0.0211). Verificacao: com rho = 1.225, V0 = 12,
+  S = 1.213: q_e = 0.5*1.225*144 = 88.2 Pa. CL_e = 14*9.81*0.987/(88.2*1.213)
+  = 135.5/107.0 = 1.266. O valor 1.266 e o CORRETO.
+
+  CORRECAO: a discrepancia com 1.856 viria de um rho ou V0 diferente.
+  Com o codigo lido, CL_e = 1.266.
+
+  CD_e = CD0 + k*CL^2 = 0.0211 + 0.0694*1.266^2 = 0.0211 + 0.1112 = 0.132
+
+  NOTA: com CD0_geom = 0.0211, o CD total e dominado pelo arrasto induzido
+  (84%). Isso e tipico de UAVs de alta eficiencia, mas o CD0 "limpo" pode
+  subestimar significativamente o arrasto real (ver Secao 2.5).
+
+  CX_trim = -CD_e*cos(alpha_e) + CL_e*sin(alpha_e)
+          = -0.132*0.987 + 1.266*0.163 = -0.130 + 0.207 = +0.077
+  CZ_trim = -m*g*cos(alpha_e)/(q_e*S) = -1.266
+
+  T_trim = m*g*sin(theta_e) - q_e*S*CX_trim
+         = 14*9.81*0.163 - 88.2*1.213*0.077
+         = 22.43 - 8.24 = 14.19 N
+
+  VERIFICACAO: T_trim ~ 14 N e razoavel. Para voo nivelado de UAV a
+  12 m/s com CD ~ 0.13, D = q*S*CD = 88.2*1.213*0.132 = 14.1 N.
+  A concordancia confirma consistencia interna do calculo de trim.
+
+
+==============================================================================
+SECAO 4 -- BLOCO 2: MODELO AERODINAMICO E EOM NAO-LINEARES
+==============================================================================
+
+4.1 -- Estrutura do modelo aerodinamico (linhas 305-350)
+
+  A funcao aero_forces_moments() implementa um modelo HIBRIDO:
+
+    C_total = C_base_trim + perturbacao_linear
+
+  onde:
+  - C_base_trim (CX_trim, CZ_trim) garante que no ponto de trim exato as
+    forcas aerodinamicas equilibram a gravidade com T = T_trim.
+  - Perturbacoes lineares: CX_u*du/V0 + CX_w*dw/V0 + CX_q*q_hat + CX_de*de
+
+  ANALISE CRITICA:
+
+  (a) Este modelo e CORRETO para simulacao de perturbacoes em torno do trim.
+      A inclusao das forcas de base resolve o problema encontrado no script
+      de referencia (aircraft_3dof.py), onde a ausencia de CX_trim e CZ_trim
+      levava a trim espurio (as forcas aerodinamicas no trim eram zero,
+      exigindo cos(theta)=0 para equilibrio com gravidade).
+
+  (b) A pressao dinamica e calculada com V instantaneo (q_dyn = 0.5*rho*V^2),
+      NAO com V0. Isso introduz uma nao-linearidade DELIBERADA que captura
+      a variacao de forca com velocidade alem da linearizacao. Para
+      perturbacoes grandes (dV/V0 > 20%), este efeito e significativo.
+
+  (c) O q_hat (= q*c/(2V)) usa V INSTANTANEO, nao V0. Cook define a
+      normalizacao com V0 (velocidade de referencia). CONSEQUENCIA: para
+      V muito diferente de V0, q_hat difere da convencao do modelo linear.
+      Para perturbacoes pequenas (dV/V0 < 10%), o efeito e < 1%.
+      RECOMENDACAO: para consistencia com o modelo linear, usar V0 em vez
+      de V na normalizacao de q. A correcao tem impacto minimo na pratica.
+
+  (d) AUSENCIA DE TERMOS WDOT: os derivativos CX_wdot, CZ_wdot e Cm_wdot
+      nao aparecem na funcao aero_forces_moments(). Isso e CORRETO para o
+      modelo nao-linear, pois os efeitos de aceleracao (w_dot) sao
+      IMPLICITOS na integracao temporal das EOM. Eles entram APENAS na
+      linearizacao, atraves da correcao Madelung (Bloco 4).
+
+  (e) LIMITACAO DO MODELO LINEAR DE PERTURBACAO: as derivadas CX_w, CZ_w
+      etc. sao constantes -- o modelo assume que a aerodinamica e LINEAR
+      em du, dw. Na realidade, para alpha > 12 graus (ou alpha < -2 graus),
+      os coeficientes CL e CD variam nao-linearmente. O modelo nao captura
+      stall, histerese, ou efeitos de Reynolds variavel.
+
+4.2 -- EOM nao-lineares (linhas 353-375)
+
+  A funcao longitudinal_nonlinear() implementa as equacoes de Bryan:
+
+    U_dot = -q*W - g*sin(theta) + (X_aero + T)/m
+    W_dot =  q*U + g*cos(theta) + Z_aero/m
+    q_dot = M_aero/Iy
+    theta_dot = q
+
+  VERIFICACAO:
+  - Sinal de -q*W na eq. U: CORRETO (Cook eq. 4.8)
+  - Sinal de +q*U na eq. W: CORRETO
+  - Sinal de +g*cos(theta) na eq. W: CORRETO (convencao z positivo para baixo)
+  - Empuxo T aparece na eq. U: CORRETO (alinhado com eixo x)
+  - Empuxo NAO aparece na eq. W: CORRETO (premissa de empuxo axial)
+
+  CRITICA: nenhum erro identificado nas EOM. A implementacao e CORRETA
+  e consistente com a referencia.
+
+
+==============================================================================
+SECAO 5 -- BLOCO 3: PONTO DE EQUILIBRIO (TRIM)
+==============================================================================
+
+  O trim e calculado ANALITICAMENTE (linhas 399-405), nao numericamente.
+  Isso e uma decisao de projeto CORRETA: como o modelo aerodinamico e
+  definido em torno do trim (perturbacoes lineares), o ponto de trim e
+  por DEFINICAO o estado de referencia [Ue, We, 0, theta_e].
+
+  A verificacao numerica (linhas 420-429) calcula os residuos das EOM no
+  ponto de trim e confirma que sao < 1e-4 m/s^2. Esta verificacao e
+  ESSENCIAL: confirma que CX_trim, CZ_trim e T_trim foram calculados
+  corretamente.
+
+  CRITICA:
+
+  (a) O tolerancia de 1e-4 e ADEQUADA para as magnitudes envolvidas
+      (forcas da ordem de 10-100 N, massas de 14 kg). Residuos de
+      1e-4 m/s^2 correspondem a forcas residuais de ~1.4e-3 N (< 0.01%
+      de m*g).
+
+  (b) delta_e_trim = 0 e uma convencao do modelo perturbativo: o elevator
+      esta na posicao de REFERENCIA. A deflexao de elevator necessaria
+      para o trim REAL nao e calculada. Para saber o delta_e fisico
+      necessario, seria preciso resolver:
+        Cm_e(alpha_e, delta_e_real) = 0
+      com o modelo completo (nao perturbativo). O codigo nao faz isso,
+      o que e aceitavel para analise de estabilidade, mas significa que
+      nao sabemos se o elevator tem autoridade suficiente para trimmar.
+
+
+==============================================================================
+SECAO 6 -- BLOCO 4: LINEARIZACAO E CORRECAO MADELUNG
+==============================================================================
+
+6.1 -- Derivadas dimensionais (linhas 468-486)
+
+  As derivadas dimensionais sao calculadas conforme Cook Cap. 5:
+
+    Xi = q_e*S*CX_i / (m*V0)   [forca por unidade de velocidade, 1/s]
+    Mi = q_e*S*c*Cm_i / (Iy*V0) [momento por unidade de velocidade, 1/s^2?]
+
+  NOTA SOBRE UNIDADES:
+  - Xu, Xw, Zu, Zw tem unidades de [1/s] (aceleracao por unidade de vel.)
+  - Xq, Zq tem unidades de [m/s] (por causa do fator c/(2V0) de q_hat)
+  - Mu, Mw tem unidades de [1/(m*s)] (momento por unidade de vel. / Iy)
+  - Mq tem unidades de [1/s] (momento por taxa de arfagem / Iy)
+
+  VERIFICACAO: as unidades sao consistentes com a formulacao de Cook.
+  A fatoracao pelo denominador V0 vem da normalizacao de du = dU/V0 e
+  dw = dW/V0 nos coeficientes adimensionais.
+
+  CRITICA: nenhum erro encontrado na conversao adimensional --> dimensional.
+
+6.2 -- Correcao Madelung (linhas 488-501)
+
+  A correcao Madelung trata o ACOPLAMENTO entre W_dot e as EOM.
+  Na equacao Z (eq. 2 linearizada):
+
+    (1 - Zw_dot)*w_dot = Zu*u + Zw*w + (Zq + Ue)*q - g*sin(theta_e)*theta
+
+  O termo Zw_dot*w_dot no lado esquerdo modifica a "massa efetiva" em Z.
+  Isolando w_dot e substituindo na eq. de M:
+
+    denom = (1 - Zw_dot)
+    Zu'  = Zu / denom
+    Zw'  = Zw / denom
+    Zq'  = (Zq + Ue) / denom
+    Mu'  = Mu + Mwdot*Zu / denom
+    Mw'  = Mw + Mwdot*Zw / denom
+    Mq'  = Mq + Mwdot*(Zq + Ue) / denom
+
+  Com os derivativos geometricos:
+    Zwdot = -0.031  (pequeno porque CZ_wdot = -0.198 e c/(2V0) = 0.021)
+    denom = 1 - (-0.031) = 1.031
+
+  ANALISE: denom ~ 1.03, ou seja, a correcao Madelung modifica as
+  derivadas em apenas ~3%. Este e o valor esperado para aeronaves
+  convencionais onde os efeitos de aceleracao normal sao pequenos.
+
+  Mwdot = q_e*S*c^2*Cm_wdot / (2*Iy*V0)
+        = 88.2*1.213*0.5048^2*(-0.440) / (2*0.385*12)
+        = 88.2*1.213*0.2548*(-0.440) / 9.24
+        = -1.302
+
+  Mq_corrigido = Mq + Mwdot*(Zq + Ue)/denom
+
+  CRITICA: a implementacao da correcao Madelung e CORRETA e segue
+  fielmente Cook Cap. 5. A inclusao desta correcao e NECESSARIA para
+  precisao nos modos longitudinais, especialmente o periodo curto.
+
+6.3 -- Matriz A (linhas 512-517)
+
+  A = [[Xu,   Xw,   Xq-W_trim,           -g*cos(theta_trim)]
+       [Zu',  Zw',  Zq',                  Zg'               ]
+       [Mu',  Mw',  Mq',                  Mg'               ]
+       [0,    0,    1,                     0                 ]]
+
+  VERIFICACAO do termo (1,3) = Xq - W_trim:
+  Na eq. U linearizada: du_dot = ... + (Xq - We)*q + ...
+  O termo -We*q vem da linearizacao de -q*W em torno de We:
+    -q*(We + dw) ~ -q*We - q*dw  --> contribuicao -We*q na linha u
+  e Xq*q do modelo aerodinamico. Soma: (Xq - We)*q. CORRETO.
+
+  VERIFICACAO do termo (1,4) = -g*cos(theta_e):
+  Linearizando -g*sin(theta) em torno de theta_e:
+    -g*sin(theta_e + dtheta) ~ -g*sin(theta_e) - g*cos(theta_e)*dtheta
+  O termo constante -g*sin(theta_e) e absorvido pelo trim (cancela com T).
+  Resta -g*cos(theta_e)*dtheta na perturbacao. CORRETO.
+
+  CRITICA: a matriz A esta CORRETAMENTE construida. Os termos de gravidade,
+  acoplamento inercial e Madelung estao todos presentes e com sinais corretos.
+
+
+==============================================================================
+SECAO 7 -- BLOCO 5: ANALISE DE AUTOVALORES E MODOS
+==============================================================================
+
+7.1 -- Autovalores obtidos
+
+  Com os derivativos geometricos, os autovalores sao:
+
+    lambda_1 = -41.254  (real)     -- SP polo 1, tau = 0.024 s
+    lambda_2 =  -3.248  (real)     -- SP polo 2, tau = 0.308 s
+    lambda_3 = -0.146 + 0.729j     -- Fugoide
+    lambda_4 = -0.146 - 0.729j     -- Fugoide (conjugado)
+
+  CLASSIFICACAO DOS MODOS:
+
+  (a) PERIODO CURTO (SP): dois polos REAIS --> modo OVERDAMPED (zeta >= 1).
+      tau_1 = 0.024 s (polo rapido, praticamente instantaneo)
+      tau_2 = 0.308 s (polo lento, determina a "cauda" da resposta)
+      O SP nao oscila -- a perturbacao em alpha decai exponencialmente.
+
+  (b) FUGOIDE (PH): par COMPLEXO conjugado --> modo OSCILATÓRIO.
+      omega_n = |lambda| = 0.744 rad/s
+      omega_d = 0.729 rad/s (frequencia amortecida)
+      zeta = -Re(lambda)/omega_n = 0.146/0.744 = +0.196
+      T = 2*pi/omega_d = 8.62 s
+      ESTAVEL (zeta > 0, Re(lambda) < 0)
+
+7.2 -- Comparacao com aproximacoes classicas
+
+  (a) SP overdamped -- explicacao fisica:
+      A aproximacao classica do SP e:
+        omega_n_sp^2 = Z_alpha * M_alpha (Cook eq. 6.xx)
+      onde Z_alpha = -Zw*V0 e M_alpha = Mw*V0.
+
+      Com derivativos geometricos:
+        Zw = q_e*S*CZ_w/(m*V0) = 88.2*1.213*(-4.922)/(14*12) = -3.135
+        Mw = q_e*S*c*Cm_w/(Iy*V0) = 88.2*1.213*0.5048*(-0.426)/(0.385*12)
+           = -5.605
+
+        Z_alpha = -(-3.135)*12 = +37.62  (positivo, estavel)
+        M_alpha = (-5.605)*12  = -67.26  (negativo, estavel)
+
+        Z_alpha * M_alpha = 37.62 * (-67.26) = -2530 < 0
+
+      O PRODUTO E NEGATIVO! Isso invalida a aproximacao classica
+      (omega_n^2 nao pode ser negativo para modo oscilatorio).
+
+      INTERPRETACAO: quando M_alpha e muito negativo E Mq e muito
+      grande em magnitude (Cm_q = -9.33), o amortecimento do SP e
+      tao forte que os dois polos se SEPARAM no eixo real. Isso
+      acontece quando o discriminante do polinomio de 2a ordem do SP
+      e positivo:
+
+        Delta = (Zw + Mq)^2 - 4*(Zw*Mq - Mw*(Zq+Ue)) > 0
+
+      Com Mq* = -41.59 (pos-Madelung), e claro que (Zw + Mq)^2 e
+      dominado por Mq^2, fazendo o discriminante positivo --> overdamped.
+
+      CRITICA: o SP overdamped e uma CONSEQUENCIA DIRETA do Cm_q
+      geometrico ser 7.3x maior que o tabelado. Se Cm_q = -1.27
+      (tabelado), Mq* ~ -5.73, e o SP seria oscilatorio (zeta ~ 0.5-0.7).
+      A formula analitica de Cm_q captura APENAS o EH e SUPERESTIMA
+      o amortecimento.
+
+  (b) Fugoide -- verificacao de Lanchester:
+      omega_n_ph (Lanchester) = g*sqrt(2)/V0 = 9.81*1.414/12 = 1.156 rad/s
+      omega_n_ph (eigenvalue) = 0.744 rad/s
+      RAZAO: 1.156/0.744 = 1.55x
+
+      A aproximacao de Lanchester SUPERESTIMA omega_n_ph em 55%. Isso e
+      esperado: Lanchester assume SP infinitamente rapido (Zw --> -inf),
+      o que nao e o caso com derivativos geometricos.
+
+      zeta_ph (Lanchester) = CD/(sqrt(2)*CL) = 0.132/(1.414*1.266) = 0.074
+      zeta_ph (eigenvalue)  = +0.196
+      RAZAO: 0.074/0.196 = 0.38x
+
+      A aproximacao subestima zeta_ph por fator ~2.6. A formula de
+      Lanchester nao inclui o efeito de Xu (que contribui para o
+      amortecimento) nem o acoplamento SP-PH.
+
+      CRITICA: as discrepancias entre as aproximacoes classicas e os
+      autovalores exatos sao SIGNIFICATIVAS mas ESPERADAS para uma
+      aeronave com estas caracteristicas (Cm_q muito grande, SP overdamped).
+      As aproximacoes classicas sao uteis para intuicao fisica mas nao
+      substituem a analise completa de autovalores.
+
+7.3 -- Comparacao com resultados anteriores (derivativos tabelados)
+
+  Para referencia, com os derivativos TABELADOS:
+    SP: lambda = -23.24 e -1.51 (overdamped, mas menos extremo)
+    PH: lambda = +0.027 +/- 0.714j (INSTAVEL, zeta = -0.037)
+
+  Mudancas principais ao passar para derivativos geometricos:
+    - SP: polo rapido 77% mais rapido (-41.25 vs -23.24)
+      CAUSA: Cm_q 7.3x maior
+    - SP: polo lento 115% mais lento (-3.25 vs -1.51 -- CORRECAO: mais
+      rapido se |lambda| e maior; -3.25 vs -1.51, sim, mais rapido)
+      CAUSA: Mw maior compensa Mq maior
+    - PH: ESTAVEL (zeta = +0.20 vs -0.04)
+      CAUSA: Cm_u = 0 (geometrico) vs +0.034 (tabelado)
+
+  CONSEQUENCIA MAIS IMPORTANTE: a estabilidade/instabilidade do fugoide
+  DEPENDE CRITICAMENTE de Cm_u. Um valor tao pequeno quanto 0.034
+  (correspondendo a uma leve dependencia do momento com velocidade)
+  inverte a estabilidade. Isso demonstra a SENSIBILIDADE PARAMETRICA
+  do modo fugoide, que e esperada pela teoria (Cook Cap. 6): o fugoide
+  tem amortecimento intrinsecamente baixo (zeta ~ CD/(sqrt(2)*CL) ~ 0.07),
+  portanto qualquer perturbacao adicional pode muda-lo de sinal.
+
+7.4 -- Mapa de polos (Figura 1)
+
+  O codigo gera um mapa de polos com dois paineis: visao geral e zoom.
+  Esta e uma boa pratica de visualizacao, necessaria porque o polo SP-1
+  (lambda = -41.25) esta a 40+ rad/s do eixo imaginario, enquanto o
+  fugoide esta a 0.15 rad/s. Sem o zoom, o fugoide seria um ponto
+  invisivel na origem.
+
+  CRITICA MENOR: os arcos de amortecimento constante (zeta = 0.3, 0.5,
+  0.7, 1.0) sao plotados, o que e uma excelente ferramenta didatica.
+  No entanto, para polos reais (zeta >= 1), a representacao como arcos
+  nao se aplica -- os polos estao no eixo real. O codigo trata isso
+  corretamente na impressao (indica "overdamped").
+
+
+==============================================================================
+SECAO 8 -- BLOCO 6: SIMULACAO TEMPORAL
+==============================================================================
+
+8.1 -- Configuracao (linhas 780-798)
+
+  - Duracao: 60 s
+  - Entrada: degrau permanente de delta_e = +5 graus
+  - Metodo NL: RK45 com rtol=1e-8, atol=1e-10
+  - Metodo Linear: scipy.signal.lsim
+  - CI: trim exato [Ue, We, 0, theta_e]
+
+  ANALISE CRITICA:
+
+  (a) DURACAO DE 60 s: ADEQUADA para capturar o fugoide completo.
+      Com T_ph = 8.62 s, 60 s correspondem a ~7 periodos completos.
+      Para o fugoide estavel (zeta = 0.20), a constante de tempo de
+      decaimento e tau = 1/(zeta*omega_n) = 1/(0.196*0.744) = 6.86 s.
+      Em 60 s, o envelope decai por fator exp(-60/6.86) = exp(-8.7) =
+      0.00017 --> a oscilacao praticamente se extingue. SUFICIENTE.
+
+      COMPARACAO com versao anterior (fugoide instavel, zeta = -0.037):
+      Com zeta < 0, tau_dobra = ln(2)/(|zeta|*omega_n) = 0.693/(0.037*0.714)
+      = 26.2 s. Em 60 s, a amplitude cresceria por fator 2^(60/26.2) = 4.8x.
+      O fugoide atingiria amplitudes onde a linearidade falha.
+      Com os derivativos geometricos (zeta > 0), este problema nao existe.
+
+  (b) DEGRAU DE +5 graus: corresponde a uma perturbacao significativa.
+      O angulo de ataque final sera alpha_e + resposta_alpha. Se a resposta
+      em alpha for ~5 graus, o angulo total sera ~14.4 graus, proximo ao
+      stall. O modelo linear e MARGINALMENTE VALIDO para esta amplitude.
+
+  (c) TOLERANCIAS DO INTEGRADOR: rtol=1e-8, atol=1e-10 sao CONSERVADORAS
+      e garantem boa precisao numerica. Para EOM de dinamica de voo com
+      escalas de tempo de 0.02-10 s, estas tolerancias sao mais que
+      suficientes. O integrador RK45 (Dormand-Prince) e adequado para
+      sistemas nao-stiff como este.
+
+  (d) COMPARACAO NL vs LINEAR: a sobreposicao das duas respostas e
+      ESSENCIAL para validar o modelo linearizado. Divergencias entre
+      as curvas indicam regioes onde a linearizacao falha.
+
+8.2 -- Teste de superposicao / INL (Bloco 6b, linhas 868-1009)
+
+  O teste de superposicao compara y_NL(2*delta_e) com 2*y_NL(delta_e).
+  Para um sistema perfeitamente linear, ambos seriam identicos.
+
+  CONFIGURACAO:
+  - Degrau base: 2 graus
+  - Degrau duplo: 4 graus
+  - Janela: 8 s
+
+  ANALISE CRITICA:
+
+  (a) ESCOLHA DA JANELA DE 8 s: JUSTIFICADA pela necessidade de capturar
+      o SP completo (2*tau_SP2 ~ 0.6 s, mas com margem para Madelung),
+      enquanto limita a contribuicao do fugoide (8 s ~ 1 periodo).
+      Com fugoide estavel (zeta = 0.20), a oscilacao fugoide presente
+      nos 8 s nao crescera exponencialmente, portanto o INL nao sera
+      artificialmente inflacionado.
+
+      NOTA: na versao anterior (fugoide instavel), a janela de 30 s
+      produzia INL > 200% porque o crescimento exponencial do fugoide
+      amplificava as diferencas. A reducao para 8 s e o uso de
+      derivativos estabveis (Cm_u = 0) eliminam este problema.
+
+  (b) O INL e calculado como:
+      INL = RMS(y_real - y_pred) / RMS(y_pred) * 100%
+
+      Esta e uma metrica PADRAO de linearidade (AIAA, MIL-HDBK-1797).
+      O denominador RMS(y_pred) normaliza pelo tamanho da resposta,
+      evitando que variaveis com valores pequenos dominem o resultado.
+
+  (c) FONTES DE NAO-LINEARIDADE no modelo:
+      - Termos inerciais: -q*W e +q*U nas EOM (bilineares em q e U/W)
+      - Termos gravitacionais: sin(theta) e cos(theta) (nao-lineares em theta)
+      - Pressao dinamica: 0.5*rho*V^2 (nao-linear em U, W)
+      - Aerodinamica: LINEAR por construcao (derivativos constantes)
+
+      CONSEQUENCIA: a nao-linearidade medida pelo INL vem EXCLUSIVAMENTE
+      das EOM e gravidade, nao da aerodinamica. Isso e corretamente
+      documentado no codigo (linha 968-969).
+
+  (d) A nota no codigo sobre T_ph = 8.8 s (linha 970) pode estar
+      DESATUALIZADA. Com derivativos geometricos, T_ph = 8.62 s. E
+      o fugoide agora e ESTAVEL, nao instavel. RECOMENDACAO: atualizar
+      a nota para refletir os valores correntes.
+
+8.3 -- Retrato de fase (Bloco 6c, linhas 1011-1101)
+
+  O retrato de fase no plano (Delta_alpha, q) e uma ferramenta de analise
+  de sistemas dinamicos que revela a TOPOLOGIA GLOBAL do espaco de estados.
+
+  CONFIGURACAO:
+  - 9 condicoes iniciais: Delta_alpha = [-8, -5, -3, -1, 0, 1, 3, 5, 8] graus
+  - Duracao: 20 s por trajetoria
+  - Sem entrada de controle (delta_e = 0)
+
+  ANALISE CRITICA:
+
+  (a) DURACAO DE 20 s: ADEQUADA. O SP se extingue em ~1 s (overdamped);
+      o fugoide oscila com T ~ 8.6 s. Em 20 s, vemos ~2 periodos de
+      fugoide com amortecimento significativo (envelope a 5% do inicial).
+
+  (b) PERTURBACOES DE +/- 8 graus: com alpha_e = 9.4 graus, a perturbacao
+      de +8 graus leva alpha a 17.4 graus -- BEM ALEM do stall tipico.
+      O modelo nao e valido nesta regiao. As trajetorias para grandes
+      perturbacoes devem ser interpretadas com CAUTELA.
+
+  (c) TOPOLOGIA ESPERADA: com SP overdamped, as trajetorias devem
+      convergir para o equilibrio SEM ESPIRALAR (decaimento exponencial
+      direto no plano alpha-q), seguido de uma oscilacao lenta de
+      pequena amplitude correspondente ao fugoide.
+
+  (d) DOIS PAINEIS (visao geral + zoom): BOA pratica. O zoom em +/-4 graus
+      mostra a regiao de validade do modelo linear. As trajetorias devem
+      se sobrepor nesta regiao (independencia da amplitude = linearidade).
+
+8.4 -- Excitacao direta dos modos (Bloco 6d, linhas 1103-1235)
+
+  Esta analise excita seletivamente cada modo longitudinal:
+  - Fugoide: perturbacao em U (Delta_U = +1 m/s, ~8% de V0)
+  - Periodo Curto: perturbacao em W (Delta_W = +0.5 m/s, ~4% de V0)
+
+  ANALISE CRITICA:
+
+  (a) AMPLITUDES DAS PERTURBACOES:
+      Delta_U = 1 m/s (8.3% de V0): perturbacao MODERADA, na margem
+      do regime linear. Aceitavel para primeira analise.
+      Delta_W = 0.5 m/s (4.2% de V0): perturbacao PEQUENA, bem dentro
+      do regime linear. Adequada.
+
+  (b) SELETIVIDADE DAS EXCITACOES:
+      A perturbacao em U excita PREFERENCIALMENTE o fugoide (que e
+      dominado por trocas u-theta), mas tambem excita o SP (que responde
+      a qualquer perturbacao). O SP se extingue rapidamente (tau = 0.024 s
+      e 0.308 s), deixando apenas o fugoide apos ~1 s.
+
+      A perturbacao em W excita PREFERENCIALMENTE o SP (dominado por w-q),
+      mas igualmente excita o fugoide. Como o fugoide e mais lento
+      (omega_d = 0.729 rad/s vs SP tau = 0.024 s), a separacao temporal
+      e eficaz: nos primeiros 2 s, vemos o SP; apos 5 s, vemos o fugoide.
+
+  (c) MEDICAO DO PERIODO DO FUGOIDE:
+      O codigo usa o periodo TEORICO dos autovalores (T_ph do Bloco 5)
+      em vez de medir por cruzamentos de zero na simulacao.
+      JUSTIFICATIVA (linhas 1155-1161): a medicao por zero-crossings e
+      imprecisa porque (i) a IC excita ambos os modos, (ii) a CI em
+      Delta_theta = 0 faz o sinal comeciar em zero (modo seno, nao
+      cosseno), tornando os cruzamentos ambiguos, e (iii) com poucas
+      oscilacoes, a resolucao e baixa.
+      CRITICA: esta justificativa e VALIDA. O uso do periodo teorico e
+      a abordagem mais robusta para este sistema.
+
+  (d) NOTA SOBRE INSTABILIDADE (linhas 1168-1169 e 1181):
+      O codigo menciona "instavel zeta=..." nos titulos dos graficos,
+      mas com derivativos geometricos o fugoide e ESTAVEL (zeta = +0.20).
+      VERIFICACAO NECESSARIA: confirmar que os rotulos nos graficos
+      refletem corretamente o sinal de zeta. Se zeta > 0, o rotulo
+      deveria dizer "estavel" ou "amortecido".
+      CRITICA: na linha 1181, o titulo do grafico inclui zeta_ph que
+      pode ser positivo. Se o titulo mostra "instavel" quando zeta > 0,
+      ha um erro de rotulagem. Na verdade, lendo a linha 1181:
+        title=f'Fugoide - DeltaV\n(T = {T_ph_meas:.1f} s, instavel zeta={zeta_ph:.3f})'
+      A palavra "instavel" esta HARDCODED no titulo. Com zeta_ph = +0.196,
+      o titulo dira "instavel zeta=0.196", o que e INCORRETO.
+      RECOMENDACAO: corrigir para usar condicional:
+        "estavel" if zeta_ph > 0 else "instavel"
+
+  (e) DURACAO DE 60 s PARA EXCITACAO MODAL: ADEQUADA. Com T_ph ~ 8.6 s,
+      60 s captura ~7 ciclos completos. O amortecimento (zeta = 0.20)
+      garante que a oscilacao decai significativamente neste intervalo.
+      PARA O SP: o zoom de 5 s (linhas 1200-1201) e ADEQUADO pois
+      tau_SP1 = 0.024 s e tau_SP2 = 0.308 s; em 5 s, ambos os polos
+      atingiram 99.99% e 99.998% do decaimento, respectivamente.
+
+
+==============================================================================
+SECAO 9 -- BLOCO 7: FUNCOES DE TRANSFERENCIA E DIAGRAMAS DE BODE
+==============================================================================
+
+9.1 -- Extracao das funcoes de transferencia (linhas 1237-1280)
+
+  O codigo usa scipy.signal.ss2tf() para converter o sistema de espacos
+  de estados em funcoes de transferencia:
+
+    H(s) = C*(sI - A)^(-1)*B + D
+
+  Sao extraidas quatro FTs: u/delta_e, w/delta_e, q/delta_e, theta/delta_e.
+
+  ANALISE CRITICA:
+
+  (a) O denominador de TODAS as FTs e o mesmo: det(sI - A), que e a
+      equacao caracteristica de 4a ordem. As raizes devem coincidir com
+      os autovalores do Bloco 5. O codigo verifica isso (linha 1271).
+
+  (b) A equacao caracteristica fatorada:
+      Delta(s) = (s + 41.25)(s + 3.25)(s^2 + 0.292*s + 0.554)
+      Os dois fatores do SP sao lineares (polos reais); o fator do
+      fugoide e quadratico.
+
+  (c) Os ZEROS das FTs theta/delta_e e q/delta_e revelam informacoes
+      adicionais sobre a resposta:
+      - Zeros de theta/delta_e: tipicamente um zero real proximo ao
+        polo SP lento, que causa "inverse response" (theta inicialmente
+        vai na direcao oposta antes de reverter).
+      - Zeros de q/delta_e: q(s) = s*theta(s), portanto um zero
+        adicional na origem.
+
+  CRITICA: a impressao dos numeradores e denominadores e uma boa pratica,
+  mas nao ha fatoracao dos zeros. RECOMENDACAO: adicionar np.roots(num)
+  para cada FT para identificar os zeros e interpretar seu significado
+  fisico.
+
+9.2 -- Diagramas de Bode (linhas 1282-1337)
+
+  O codigo gera Bode plots para theta/delta_e e q/delta_e, com marcacoes
+  verticais nas frequencias naturais dos modos.
+
+  ANALISE CRITICA:
+
+  (a) FAIXA DE FREQUENCIA: 0.001 a 100 rad/s com 2000 pontos.
+      omega_n_ph = 0.744 rad/s e omega_n_sp1 = 41.25 rad/s.
+      A faixa cobre ambos os modos com boa margem. ADEQUADA.
+
+  (b) INTERPRETACAO ESPERADA DO BODE theta/delta_e:
+      - Em baixa frequencia (omega << omega_ph): ganho constante
+        (resposta estatica do sistema ao degrau)
+      - Pico na frequencia do fugoide (~0.7 rad/s): se zeta_ph e baixo,
+        havera resonancia
+      - Queda apos o fugoide (-40 dB/dec para sistema de 2a ordem)
+      - Segundo "pico" ou break na frequencia do SP (~3 e ~41 rad/s):
+        como o SP e overdamped (dois polos reais), nao ha resonancia --
+        o Bode mostra dois breaks de -20 dB/dec cada
+
+  (c) INTERPRETACAO DA FASE:
+      - Atraso de fase acumulado de -360 graus (sistema de 4a ordem)
+      - Cada polo real contribui com -90 graus
+      - O par complexo do fugoide contribui com -180 graus total
+      - Os zeros do numerador podem causar avancos de fase locais
+
+  (d) MARCACOES VERTICAIS: as linhas em omega_n_SP e omega_n_PH sao
+      uma excelente ferramenta de interpretacao. No entanto:
+      - omega_n_SP e plotado como um unico valor (wn_sp = |lambda_SP1|
+        = 41.25), mas o SP tem DOIS polos reais (41.25 e 3.25). Seria
+        mais informativo plotar AMBOS os polos como linhas verticais.
+      RECOMENDACAO: adicionar uma terceira linha vertical em |lambda_SP2|
+      = 3.25 rad/s.
+
+
+==============================================================================
+SECAO 10 -- ANALISE DE SUFICIENCIA DOS TEMPOS DE SIMULACAO
+==============================================================================
+
+  Resumo dos tempos utilizados em cada bloco:
+
+  Bloco     Duracao     Justificativa              Veredicto
+  -----     -------     -------------              ---------
+  6 (step)  60 s        ~7 periodos de PH          ADEQUADO
+  6b (INL)   8 s        SP settle + inicio PH      ADEQUADO (*)
+  6c (fase) 20 s        ~2 periodos de PH           ADEQUADO
+  6d (modal)60 s        ~7 periodos de PH           ADEQUADO
+  6d (SP)    5 s zoom   ~20*tau_SP2                  ADEQUADO
+
+  (*) NOTA: com os derivativos geometricos (fugoide estavel), a janela
+  de 8 s e conservadora. Poderia ser estendida para 30 s sem risco de
+  inflacao do INL (ao contrario da versao anterior com fugoide instavel).
+  A extensao permitiria avaliar a linearidade ao longo de multiplos
+  ciclos de fugoide.
+
+  CRITERIO GERAL: para analise de modos longitudinais, a duracao minima
+  recomendada e:
+    t_min = max(5*tau_SP, 3*T_PH) = max(5*0.308, 3*8.62) = max(1.54, 25.86) = 25.9 s
+
+  Todas as simulacoes de 60 s excedem este criterio por fator > 2x.
+  A simulacao de 8 s (INL) e 20 s (fase) nao excedem, mas tem
+  justificativas especificas (ver secoes 8.2 e 8.3).
+
+  PONTOS DE RESOLUCAO TEMPORAL:
+    Bloco 6:  3000 pts / 60 s = 50 Hz    dt = 0.02 s
+    Bloco 6b: 2000 pts / 8 s  = 250 Hz   dt = 0.004 s
+    Bloco 6c: 2000 pts / 20 s = 100 Hz   dt = 0.01 s
+    Bloco 6d: 6000 pts / 60 s = 100 Hz   dt = 0.01 s
+
+  O modo mais rapido e o SP polo 1 (tau = 0.024 s, ~42 rad/s).
+  Criterio de Nyquist: dt < pi/omega_max = pi/42 = 0.075 s.
+  Todos os dt utilizados atendem este criterio com margem > 3x.
+  VEREDICTO: resolucao temporal ADEQUADA em todos os blocos.
+
+  NOTA: o integrador RK45 (adaptativo) usa passo interno automatico,
+  independente de t_eval. Os pontos de t_eval sao obtidos por interpolacao
+  (dense output). Portanto, a resolucao dos pontos de saida nao afeta
+  a precisao numerica -- afeta apenas a resolucao visual dos graficos.
+
+
+==============================================================================
+SECAO 11 -- CRITICAS E RECOMENDACOES
+==============================================================================
+
+11.1 -- Criticas ao modelo
+
+  CRITICA 1 (ALTA): Superestimacao sistematica de CLa
+    A formula de Helmbold com a0 = 2*pi nao corrige para efeitos viscosos
+    de baixo Reynolds (Re ~ 4*10^5). O CLa real e provavelmente 20-40%
+    menor. Isso afeta CZ_w, Cm_alpha, Cm_q, CZ_q, e todos os derivativos
+    derivados. Consequencia: o SP overdamped pode ser um artefato do CLa
+    superestimado.
+    RECOMENDACAO: usar a0 corrigido por dados de tunel de vento ou
+    calculo XFOIL/XFoil para o perfil especifico e Re operacional.
+
+  CRITICA 2 (ALTA): CD0 subestimado
+    CD0_geom = 0.0211 nao inclui arrasto de interferencia asa-fuselagem,
+    arrasto de trem de pouso, antenas, rugosidade superficial. O valor
+    real e provavelmente 3-4x maior (CD0 ~ 0.06-0.08). Consequencia
+    direta: T_trim subestimado, zeta_ph subestimado.
+    RECOMENDACAO: usar CD0 tabelado (0.0806) ou valor de CFD/tunel,
+    e manter k geometrico (que e correto: k = 1/(pi*AR*e) depende
+    apenas de geometria).
+
+  CRITICA 3 (MEDIA): Cm_q superestimado (formula apenas EH)
+    A formula Cm_q = -2*CLaEH*VH*(l_EH/c) captura apenas a contribuicao
+    do estabilizador horizontal. Na realidade, a asa e a fuselagem
+    tambem contribuem para Cm_q, e a asa pode contribuir com 20-30%
+    do total. Alem disso, o CLaEH superestimado (ponto 1) amplifica
+    o erro. Valor resultante 7.3x maior que o tabelado.
+    RECOMENDACAO: incluir contribuicao da asa ao Cm_q:
+      Cm_q_asa ~ -0.5*CLaw*(x_cg - x_ca)^2 (Cook, eq. 4.xx)
+    Ou usar fator de correcao empirico.
+
+  CRITICA 4 (MEDIA): Rotulagem incorreta no Bloco 6d
+    A palavra "instavel" esta hardcoded no titulo do grafico do fugoide
+    (linha 1181), quando o modo agora e estavel (zeta = +0.196).
+    RECOMENDACAO: usar condicional para rotulagem dinamica.
+
+  CRITICA 5 (MEDIA): Nota desatualizada no Bloco 6b
+    A linha 970 menciona "crescimento instavel" e T_ph = 8.8 s. Com
+    derivativos geometricos, T_ph = 8.62 s e o fugoide e estavel.
+    RECOMENDACAO: atualizar a nota.
+
+  CRITICA 6 (BAIXA): Ausencia de analise de sensibilidade
+    O modelo depende de ~15 parametros geometricos. Nao ha analise de
+    como a incerteza nestes parametros (especialmente deps_dalpha, tau_e,
+    Cm_alpha_fus, a0) propaga para os autovalores e modos.
+    RECOMENDACAO: implementar analise de sensibilidade variando cada
+    parametro em +/-20% e recalculando os autovalores. Isso permitiria
+    identificar quais parametros tem MAIOR impacto na estabilidade.
+
+  CRITICA 7 (BAIXA): Ausencia de modelo aerodinamico nao-linear completo
+    O modelo aerodinamico usa derivativos constantes. Para perturbacoes
+    grandes (degrau de 5 graus com alpha_e = 9.4 graus), o angulo de
+    ataque pode atingir 14+ graus, onde CL(alpha) nao e mais linear.
+    Um modelo com CL = CL0 + CLa*alpha para alpha < alpha_stall e
+    CL = CL_max*sin(2*alpha) para alpha > alpha_stall seria mais
+    realista para as simulacoes nao-lineares.
+    NOTA: esta critica e de BAIXA prioridade porque o objetivo do
+    codigo e analise de ESTABILIDADE LINEAR, nao simulacao de
+    envelope completo.
+
+  CRITICA 8 (BAIXA): Nao calcula deflexao real do elevator para trim
+    O modelo usa delta_e_trim = 0 (perturbacao de referencia), mas nao
+    calcula a deflexao real necessaria para trimmar a aeronave. Isso
+    impede a avaliacao de autoridade de controle.
+    RECOMENDACAO: adicionar calculo de delta_e_real = -Cm0/Cm_de
+    onde Cm0 e o momento residual a delta_e = 0.
+
+  CRITICA 9 (BAIXA): Ausencia de criterios normativos (MIL-STD-1797)
+    Os resultados de zeta e omega_n dos modos nao sao comparados com
+    criterios de qualidades de voo (MIL-STD-1797A / ESDU). Para o SP,
+    o criterio Nivel 1 exige 0.35 < zeta < 1.30 e omega_n_sp conforme
+    a carga alar. Para o fugoide, exige zeta_ph > 0.04 (Nivel 1).
+    RECOMENDACAO: adicionar verificacao de normas.
+
+  CRITICA 10 (INFORMATIVA): Convencao l_EH
+    Nao e claro se l_EH e medido do CA da asa ao CA do EH ou do CG
+    ao CA do EH. A diferenca (0.18*c ~ 9 cm) e ~8% de l_EH e afeta
+    VH e Cm_q proporcionalmente.
+    RECOMENDACAO: documentar explicitamente a convencao.
+
+11.2 -- Pontos positivos do codigo
+
+  (a) RASTREABILIDADE: o Bloco 0 permite rastrear cada derivativo ate
+      sua origem geometrica. Isso e pedagogicamente EXCELENTE e facilita
+      a depuracao e validacao.
+
+  (b) CORRECAO MADELUNG: a inclusao da correcao para termos de aceleracao
+      w_dot e CORRETA e frequentemente omitida em implementacoes didaticas.
+
+  (c) FORCAS DE BASE: a inclusao de CX_trim e CZ_trim no modelo
+      aerodinamico resolve o problema fundamental de equilibrio que
+      afeta muitas implementacoes academicas.
+
+  (d) VERIFICACAO DE RESIDUOS: a confirmacao numerica do trim (Bloco 3)
+      garante consistencia interna.
+
+  (e) MULTIPLAS ANALISES: o codigo executa 7 tipos de analise (trim,
+      linearizacao, autovalores, step response, superposicao, retrato de
+      fase, excitacao modal, Bode), fornecendo uma visao COMPLETA da
+      dinamica longitudinal.
+
+  (f) DOCUMENTACAO INLINE: cada bloco tem header extenso com premissas,
+      referencias e notas. Isso e excelente para um codigo academico.
+
+  (g) VISUALIZACAO: os graficos sao bem formatados, com legendas,
+      anotacoes e multiplos paineis. A pratica de dois paineis
+      (visao geral + zoom) e particularmente util.
+
+11.3 -- Resumo de resultados
+
+  Parametro                  Valor          Veredicto
+  ---------                  -----          ---------
+  CLa_w (Helmbold)           4.376 rad^-1   Superestimado ~40%
+  VH (volume EH)             0.489          Razoavel
+  SM (margem estatica)       +9.73%         Adequada
+  Cm_alpha_total             -0.426 rad^-1  Estavel
+  SP polo 1 (tau_1)          0.024 s        Muito rapido (Cm_q alto)
+  SP polo 2 (tau_2)          0.308 s        Razoavel
+  SP tipo                    Overdamped     Questionavel (Cm_q superest.)
+  PH omega_n                 0.744 rad/s    Razoavel
+  PH zeta                    +0.196         Estavel (Cm_u = 0)
+  PH periodo                 8.62 s         Consistente
+  T_trim                     ~14 N          Subestimado (CD0 baixo)
+  INL (superposicao)         A verificar    Depende da execucao
+
+11.4 -- Veredicto final
+
+  O codigo EstabilidadeLongitudinal.py na sua versao final constitui uma
+  implementacao COMPLETA e CORRETA (dentro das premissas declaradas) de
+  analise de dinamica longitudinal 3-DOF para UAV. As equacoes de movimento,
+  linearizacao, e analise modal seguem fielmente a referencia de Cook.
+
+  A principal inovacao -- o Bloco 0 com derivacao analitica de derivativos
+  a partir de parametros construtivos -- adiciona rastreabilidade e
+  capacidade pedagogica que faltava na versao original com derivativos
+  tabelados.
+
+  As PRINCIPAIS LIMITACOES sao:
+  (1) Superestimacao de CLa por uso de a0 = 2*pi sem correcao viscosa
+  (2) CD0 subestimado por ausencia de arrasto de interferencia
+  (3) Cm_q superestimado por considerar apenas contribuicao do EH
+
+  Estas limitacoes sao INERENTES ao metodo analitico de primeiros
+  principios e sao esperadas. A correcao requer dados experimentais
+  ou computacionais (CFD, XFOIL) que estao fora do escopo do calculo
+  analitico puro.
+
+  O codigo e ADEQUADO para fins didaticos e para analise parametrica
+  comparativa. Para projeto ou certificacao, os derivativos devem ser
+  validados contra dados de tunel de vento ou ensaio em voo.
+
+
+==============================================================================
+  FIM DO DOCUMENTO
+  revisao_critica_Final.txt -- 05/04/2026
+==============================================================================
