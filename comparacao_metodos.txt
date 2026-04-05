@@ -1,0 +1,913 @@
+================================================================================
+  ANÁLISE COMPARATIVA DE METODOLOGIAS
+  Dinâmica Longitudinal de Aeronave — 3 Graus de Liberdade
+  Postura: Professor de Dinâmica de Voo
+  Data: Abril de 2026
+================================================================================
+
+  Script A : ModelagemAerodinamica.py
+             Referência: Cook, M.V. — Flight Dynamics Principles, Cap. 5–6
+             Aeronave  : UAV ~14 kg (parâmetros do grupo AXE FLY 2024)
+
+  Script B : aircraft_3dof.py
+             Referência: Perkins & Hage, Nelson, Etkin & Reid (Bloco 0)
+                         Bryan (1911) para as EOM
+             Aeronave  : AXE FLY 2024 (declarada), mas misturada com
+                         parâmetros de jato (ver Seção 10)
+================================================================================
+
+
+================================================================================
+SEÇÃO 0 — IDENTIFICAÇÃO E CONTEXTO DOS DOIS SCRIPTS
+================================================================================
+
+Antes de entrar nas comparações técnicas, é necessário identificar claramente
+o que cada script pretende ser e o que de fato entrega.
+
+SCRIPT A (ModelagemAerodinamica.py)
+------------------------------------
+Propósito declarado: análise longitudinal 3-DOF seguindo Cook (Cap. 5-6),
+partindo de derivativas de estabilidade tabeladas e chegando até funções de
+transferência e diagramas de Bode.
+
+Pipeline implementado:
+  Parâmetros → Modelo aerodinâmico (EOM de Bryan) → Trim analítico
+  → Linearização analítica + Madelung → Autovalores → Simulação
+  (NL e Linear) → Funções de transferência → Bode
+
+Aeronave real (conforme parâmetros):
+  m = 14 kg, Iy = 0.385 kg·m², S = 1.213 m², c = 0.5048 m, V0 = 12 m/s
+  → UAV de porte médio, provavelmente asa fixa de 14 kg (AXE FLY 2024)
+
+SCRIPT B (aircraft_3dof.py)
+-----------------------------
+Propósito declarado: demonstração completa de dinâmica longitudinal 3-DOF
+com derivação de 1ª princípios dos coeficientes de estabilidade e análise
+não-linear.
+
+Pipeline implementado:
+  Geometria construtiva → Derivadas de 1ª princípios (Bloco 0)
+  → EOM de Bryan → Trim numérico → Simulação NL → Retrato de fase
+  → Linearização numérica → Autovalores → FTs (biblioteca control)
+  → Modos longitudinais
+
+Aeronave declarada: "AXE FLY 2024" (Bloco 0) e "F-4C Phantom" (Bloco 1)
+Aeronave real (conforme parâmetros):
+  m = 14 kg, S = 1.213 m², c = 0.5048 m, V0 = 12 m/s → UAV ~14 kg
+  MAS: Iy = 165669 kg·m² → valor incompatível (ver Seção 10)
+
+OBSERVAÇÃO INICIAL AO ALUNO:
+  Ambos os scripts modelam a MESMA aeronave física (UAV ~14 kg, AXE FLY 2024),
+  mas com graus muito diferentes de consistência interna. A seguir detalharemos
+  exatamente onde cada abordagem acerta, erra e onde uma complementa a outra.
+
+
+================================================================================
+SEÇÃO 1 — ABORDAGEM METODOLÓGICA GERAL
+================================================================================
+
+1.1 CONGRUÊNCIAS FUNDAMENTAIS
+-------------------------------
+
+Ambos os scripts compartilham as mesmas bases físicas e metodológicas:
+
+  [1] Equações de movimento de Bryan (1911) em eixo de corpo (body axes):
+      m(U̇ + qW) = X_total + T − m·g·sin(θ)   [força axial]
+      m(Ẇ − qU) = Z_total      + m·g·cos(θ)   [força normal, z↓]
+      Iy·q̇      = M_total                      [momento de arfagem]
+      θ̇         = q                            [cinemática]
+
+  [2] Desacoplamento lateral-direcional:
+      v = p = r = φ = 0 → movimento longitudinal puro (3 DOF + θ)
+
+  [3] Formulação de pequenas perturbações (teoria linearizada):
+      Estado de perturbação x = [u, w, q, θ] em torno do trim
+
+  [4] Identificação dos dois modos longitudinais clássicos:
+      - Período Curto (Short-Period, SP): alta frequência, dominado por w e q
+      - Fugóide (Phugoid, PH): baixa frequência, dominado por u e θ
+
+  [5] Integração numérica por RK45 (scipy.integrate.solve_ivp)
+
+  [6] Extração de autovalores da matriz de estados A
+
+  [7] Referência: empuxo T alinhado ao eixo x do corpo, ISA ao nível do mar
+
+1.2 DIVERGÊNCIAS FUNDAMENTAIS
+-------------------------------
+
+A tabela abaixo resume as divergências de abordagem. Cada item será
+detalhado nas seções seguintes.
+
+  Aspecto                    | Script A                | Script B
+  ---------------------------+-------------------------+----------------------------
+  Origem dos derivativos     | Tabelados (Cook/dados)  | Calculados: geometria → 1ª princ.
+  Modelo de trim             | Analítico (explícito)   | Numérico via fsolve (bug crítico)
+  Forças de base no trim     | Incluídas (CX_e, CZ_e)  | Omitidas (modelo puro perturbativo)
+  Linearização               | Jacobiano analítico     | Jacobiano numérico (dif. finitas)
+  Correção Madelung (ẇ)      | Explícita na matriz A   | Ausente (invisível no numérico)
+  Derivada Cm_u              | 0.0340 ≠ 0 (instável)  | 0.0 forçado (simplificação)
+  Inércia em arfagem Iy      | 0.385 kg·m² (coerente) | 165669 kg·m² (ERRO GRAVE)
+  Bibliotecas de controle    | scipy.signal            | python-control (ct)
+  Análises adicionais        | Bode, comparação NL/Lin | Retrato de fase, superposição
+  Varredura de velocidades   | Não implementada        | 120–280 m/s (INCOERENTE)
+
+1.3 AVALIAÇÃO GERAL
+---------------------
+
+  Script A representa a abordagem analítica clássica de Cook — sistemática,
+  com derivações explícitas e correções aeroeláticas (Madelung). É o método
+  padrão de cursos avançados de dinâmica de voo.
+
+  Script B representa a abordagem construtiva, partindo da geometria para
+  chegar aos derivativos. É mais didático para quem quer entender a física
+  construtiva, mas sofre de inconsistências graves nos parâmetros de entrada
+  que comprometem toda a análise numérica.
+
+
+================================================================================
+SEÇÃO 2 — DERIVAÇÃO DOS COEFICIENTES DE ESTABILIDADE
+================================================================================
+
+Esta é a diferença metodológica mais significativa entre os dois scripts.
+
+2.1 SCRIPT A — DERIVATIVOS TABELADOS
+--------------------------------------
+
+Todos os coeficientes adimensionais são fornecidos diretamente:
+
+  CX_u =  0.0076   CX_w =  0.0483   CX_q = 0.0     CX_de =  0.0618
+  CZ_u = -0.7273   CZ_w = -3.1245   CZ_q = -1.2109  CZ_de = -0.3741
+  Cm_u =  0.0340   Cm_w = -0.2169   Cm_q = -1.2732  Cm_de = -0.5581
+  CZ_wdot = -0.3997             Cm_wdot = -0.5910
+
+  Fonte presumida: dados experimentais ou CFD (referência "Cap. 4")
+
+  VANTAGENS:
+  + Precisão: se oriundos de boa fonte experimental ou CFD, refletem o
+    comportamento real da aeronave, incluindo não-linearidades médias
+  + Generalidade: podem ser usados para qualquer fase de voo com tabela
+  + Inclui derivativos de aceleração (CZ_wdot, Cm_wdot) — raramente
+    calculados analiticamente com precisão
+
+  DESVANTAGENS:
+  - Não mostra ao aluno como os derivativos emergem da geometria
+  - Não permite análise de sensibilidade a parâmetros construtivos
+  - Dependência de fonte externa — se errada, todo o resultado é errado
+
+2.2 SCRIPT B — DERIVATIVOS DE 1ª PRINCÍPIOS (Bloco 0)
+-------------------------------------------------------
+
+O Script B computa os derivativos a partir da geometria da aeronave
+usando teoria clássica. É um exercício pedagógico de alto valor.
+
+  2.2.1 Inclinação da curva CL × α (Helmbold/Prandtl-Glauert):
+
+        a₀ = 2π  [perfil 2D, 1/rad]
+        CLα = a₀ / (β + a₀/(π·e·AR))   onde β = √(1 - M²)
+
+        Asa   (AR=5.15, e=0.89): CLα_w  = 4.47 /rad
+        EH    (AR=5.05, e=0.85): CLα_EH = 4.41 /rad
+
+        NOTA DIDÁTICA: a fórmula de Helmbold é mais precisa que a
+        simples proporção CLα ≈ 2π·AR/(AR+2) para asas de alongamento
+        intermediário (2 < AR < 8). Para AR > 10, ambas convergem.
+
+  2.2.2 Volume do Estabilizador Horizontal:
+
+        VH = l_EH · S_EH / (c̄ · S) = 1.124 × 0.2662 / (0.5048 × 1.213) = 0.488
+
+        VH é o parâmetro fundamental de dimensionamento do EH. Valores
+        típicos para aeronaves convencionais: VH ∈ [0.3, 0.6].
+
+  2.2.3 Momento de arfagem em ângulo zero (Cm0):
+
+        Cm0_asa = Cm_perfil = -0.26  [dado do perfil]
+        Cm0_fus = +0.03              [dado da fuselagem]
+        Cm0_EH  = -CLα_EH · VH · (iw - ih - ε₀)
+
+        Cm0_total ≈ -0.26 + 0.03 + Cm0_EH  → deve ser positivo para
+        gerar momento nose-up que permita trim em α > 0
+
+  2.2.4 Derivada Cm × α (estabilidade estática):
+
+        Cm_α_asa = CLα_w · (x_cg - x_ca) = 4.47 × (0.43 - 0.25) = +0.805 /rad
+        [desestabilizador — CG atrás do CA é incorreto; CG ANTES do CA = desestabilizador]
+
+        Cm_α_EH  = -CLα_EH · VH · (1 - dε/dα) = -4.41 × 0.488 × (1-0.42) = -1.25 /rad
+        [estabilizador — sempre negativo]
+
+        Cm_α_total ≈ 0.805 + 0.0012 - 1.25 = -0.444 /rad  (estável!)
+
+        Margem estática (SM) = (x_np - x_cg)/c̄ > 0 para aeronave estável
+        O Script B calcula SM ≈ +18%, o que é razoável para UAV convencional.
+
+  2.2.5 Amortecimento em arfagem (Cm_q):
+
+        Cm_q = -2 · CLα_EH · VH · (l_EH/c̄) = -2 × 4.41 × 0.488 × (1.124/0.5048) ≈ -9.6 /rad
+
+        COMPARAÇÃO COM SCRIPT A: CZ_q = -1.21 (adimensional normalizado por
+        c̄/(2V₀)). Os dois são equivalentes? Não diretamente — as convenções
+        de normalização diferem. Ver Seção 5.
+
+  2.2.6 Derivativos de atraso (wdot) — downwash:
+
+        Cm_wdot = -CLα_EH · VH · (dε/dα) / 2 = -4.41 × 0.488 × 0.42/2 ≈ -0.452 /rad
+        CZ_wdot = -CLα_EH · (S_EH/S) · (dε/dα) / 2                     ≈ -0.205 /rad
+
+        Estes derivativos surgem do atraso finito do downwash da asa ao
+        atingir o EH. Quando a asa muda seu ângulo de ataque (variação de ẇ),
+        o downwash no EH demora um tempo l_EH/V₀ para se ajustar.
+
+  AVALIAÇÃO:
+  O Bloco 0 do Script B é o mais valioso didaticamente de ambos os scripts.
+  Permite ao aluno entender COMO cada derivativo emerge da geometria e quais
+  parâmetros construtivos têm maior influência. É o caminho correto para
+  projetos de nova aeronave ou análise de sensibilidade.
+
+
+================================================================================
+SEÇÃO 3 — MODELO AERODINÂMICO E EQUAÇÕES DE MOVIMENTO
+================================================================================
+
+3.1 CONGRUÊNCIAS NA FORMA DAS EOM
+-----------------------------------
+
+Ambos implementam corretamente as equações de Bryan (1911) em eixo de corpo:
+
+  Script A, linha 201-210 (longitudinal_nonlinear):
+    U̇ = -q·W - g·sin(θ) + (X_aero + T)/m
+    Ẇ =  q·U + g·cos(θ) + Z_aero/m
+    q̇ = M_aero/Iy
+    θ̇ = q
+
+  Script B, linhas correspondentes (longitudinal_nonlinear):
+    Idêntica estrutura. ✓
+
+  NOTA DIDÁTICA: O sinal +g·cos(θ) na equação de Ẇ está correto pois o
+  eixo z aponta PARA BAIXO (convenção body-axis). Gravity no eixo z do
+  corpo é +m·g·cos(θ) (componente na direção z). A sustentação Z_aero
+  deve ser NEGATIVA (aponta para cima = -z) para equilibrar.
+
+3.2 DIVERGÊNCIA CRÍTICA: MODELO AERODINÂMICO
+---------------------------------------------
+
+Esta é a divergência mais importante em termos de correção física.
+
+  3.2.1 Script A — Forças COMPLETAS (base + perturbação):
+
+        CX = CX_trim + CX_u·(Δu/V₀) + CX_w·(Δw/V₀) + CX_q·q̂ + CX_de·δe
+        CZ = CZ_trim + CZ_u·(Δu/V₀) + CZ_w·(Δw/V₀) + CZ_q·q̂ + CZ_de·δe
+        Cm =          Cm_u·(Δu/V₀) + Cm_w·(Δw/V₀) + Cm_q·q̂ + Cm_de·δe
+
+        Onde:
+          CZ_trim = -m·g·cos(αe)/(q_e·S)  ← da equação Ẇ=0 no trim
+          CX_trim = -CD_e·cos(αe) + CL_e·sin(αe)  ← projeção de L e D
+
+        CONSEQUÊNCIA: no ponto exato do trim (Δu=0, Δw=0, q=0, δe=0):
+          X_aero = q_e·S·CX_trim  ≠ 0   (há arrasto e sustentação!)
+          Z_aero = q_e·S·CZ_trim  ≠ 0   (há sustentação!)
+          M_aero = 0                     (Cm_trim = 0 por definição)
+
+        E as EOM no trim:
+          U̇: -g·sin(θe) + (q_e·S·CX_trim + T_trim)/m = 0  ✓ (satisfeita)
+          Ẇ:  g·cos(θe) + q_e·S·CZ_trim/m = 0  ✓ (satisfeita)
+          q̇: 0 = 0  ✓
+
+  3.2.2 Script B — Forças PERTURBATIVAS PURAS:
+
+        CX = CX_u·(Δu/V₀) + CX_w·(Δw/V₀) + ...   [sem CX_trim!]
+        CZ = CZ_u·(Δu/V₀) + CZ_w·(Δw/V₀) + ...   [sem CZ_trim!]
+
+        CONSEQUÊNCIA: no ponto exato do trim:
+          X_aero = 0   (arrasto e sustentação ignorados!)
+          Z_aero = 0   (não há sustentação de base!)
+
+        As EOM no trim se tornam:
+          U̇: 0 - g·sin(θe) + T/m = 0  → T = m·g·sin(θe) ≈ 23 N
+          Ẇ: 0 + g·cos(θe) + 0/m = g·cos(θe) ≈ 9.67 m/s² ≠ 0  ← ERRO!
+
+        Resultado: a equação Ẇ não é satisfeita no trim real, pois a
+        sustentação está faltando. O fsolve precisa encontrar outro ponto
+        onde a equação seja zerada — e encontra α≈34° (fora da validade
+        do modelo perturbativo).
+
+  3.2.3 POR QUE ISSO IMPORTA?
+
+        O modelo perturbativo puro é CORRETO para a análise LINEAR
+        (onde as EOM são dadas diretamente pelas perturbações x̃).
+        Mas é INCORRETO quando inserido nas EOM não-lineares de Bryan
+        para busca de trim.
+
+        A solução correta (implementada no Script A) é incluir as forças
+        de base que existem no trim para fechar o balanço de forças.
+
+3.3 ADIMENSIONALIZAÇÃO DA TAXA DE ARFAGEM
+-------------------------------------------
+
+Ambos os scripts usam:   q̂ = q·c̄ / (2·V)   com V instântaneo
+
+Para consistência com a teoria linear (onde q̂ = q·c̄/(2·V₀)), a versão
+correta usa V₀ fixo. A diferença é desprezível em perturbações pequenas,
+mas pode causar divergência em perturbações grandes onde V ≠ V₀.
+
+  RECOMENDAÇÃO: distinguir claramente entre o modelo usado para simulação
+  não-linear (V instântaneo, mais correto) e o modelo usado na linearização
+  (V₀ fixo, padrão na teoria de Cook).
+
+
+================================================================================
+SEÇÃO 4 — PONTO DE EQUILÍBRIO (TRIM)
+================================================================================
+
+4.1 SCRIPT A — TRIM ANALÍTICO
+-------------------------------
+
+Abordagem: O trim é identificado ANALITICAMENTE a partir das condições de
+equilíbrio de forças e momentos.
+
+  Dado: α_trim = α_e = 9.4° (ângulo de ataque de referência)
+
+  Passo 1 (equação Ẇ = 0):
+    CZ_trim = -m·g·cos(α_e) / (q_e·S) = -1.2665
+
+  Passo 2 (polar de arrasto):
+    CL_trim = m·g·cos(α_e) / (q_e·S)   → CD_trim = CD0 + k·CL_trim²
+    CL_trim = 1.2665,  CD_trim = 0.194
+
+  Passo 3 (projeção em eixo de corpo):
+    CX_trim = -CD_e·cos(α_e) + CL_e·sin(α_e) = +0.0156
+
+  Passo 4 (equação U̇ = 0):
+    T_trim = m·g·sin(α_e) - q_e·S·CX_trim = 20.76 N  ≈ D_e/cos(α_e)
+
+  Passo 5 (verificação numérica):
+    residuos = [U̇, Ẇ, q̇] avaliados em [U_e, W_e, 0, θ_e] com T_trim
+    → [0.00e+00, 0.00e+00, 0.00e+00]  ✓
+
+  ELEGÂNCIA: o trim analítico é matematicamente exato por construção,
+  sem iteração. Qualquer erro nos derivativos afetará a simulação, não
+  o trim.
+
+4.2 SCRIPT B — TRIM NUMÉRICO COM BUG
+--------------------------------------
+
+Abordagem: fsolve busca [α, δe, T] tal que [U̇, Ẇ, q̇] = 0.
+
+  O problema: as EOM avaliam forças com o modelo perturbativo puro.
+  No ponto correto [U_e, W_e, 0, θ_e]:
+    Z_aero = 0  (sem CZ_trim)
+    Ẇ = g·cos(θ_e) + 0 = 9.67 m/s²  ← não é zero!
+
+  O fsolve então encontra um ponto diferente onde o modelo perturbativo
+  "acidentalmente" gera forças que equilibram a gravidade. Esse ponto
+  fica em α ≈ 34°, muito além da validade do modelo linear.
+
+  α_trim = 34.06°  (esperado: 9.4°) ← BUG CONFIRMADO
+  Resíduos numéricos ≈ 0 (falsamente satisfeitos)
+
+  CONSEQUÊNCIA: toda a análise subsequente (simulação, autovalores) do
+  Script B parte de um ponto de operação errado.
+
+4.3 LIÇÃO FUNDAMENTAL
+----------------------
+
+  O modelo perturbativo de Cook foi projetado para a análise LINEAR.
+  Nele, as forças de base (sustentação, arrasto) estão IMPLICITAMENTE
+  absorvidas pelo trim e só as VARIAÇÕES dessas forças aparecem nas EOM.
+
+  Quando se insere o modelo perturbativo nas EOM não-lineares completas
+  de Bryan, é OBRIGATÓRIO adicionar os termos de base (CX_trim, CZ_trim)
+  para fechar o balanço de forças. Omiti-los é um erro conceitual, não
+  apenas numérico.
+
+
+================================================================================
+SEÇÃO 5 — LINEARIZAÇÃO DAS EQUAÇÕES DE MOVIMENTO
+================================================================================
+
+5.1 SCRIPT A — JACOBIANO ANALÍTICO + CORREÇÃO MADELUNG
+--------------------------------------------------------
+
+Derivação direta das EOM de Bryan, aplicando a teoria de perturbações
+de Cook (Cap. 5). As derivadas parciais são computadas analiticamente
+a partir dos coeficientes adimensionais.
+
+  Derivadas dimensionais de força [s⁻¹]:
+    Xu = q_e·S·CX_u/(m·V₀) =  0.0048
+    Xw = q_e·S·CX_w/(m·V₀) =  0.0308
+    Zu = q_e·S·CZ_u/(m·V₀) = -0.4632
+    Zw = q_e·S·CZ_w/(m·V₀) = -1.9898
+    Zq = q_e·S·CZ_q·c̄/(2m·V₀) = -0.1946
+    Zwdot = q_e·S·CZ_wdot·c̄/(2m·V₀) = -0.0642
+
+  Derivadas dimensionais de momento [s⁻¹]:
+    Mu = q_e·S·c̄·Cm_u/(Iy·V₀) =  0.3975
+    Mw = q_e·S·c̄·Cm_w/(Iy·V₀) = -2.5355
+    Mq = q_e·S·c̄²·Cm_q/(2Iy·V₀) = -3.7566
+    Mwdot = q_e·S·c̄²·Cm_wdot/(2Iy·V₀) = -1.7437
+
+  CORREÇÃO DE MADELUNG:
+  As EOM têm um termo ẇ (aceleração normal) que aparece implicitamente
+  quando se expandem as equações de Z e M. Cook (Cap. 4) resolve isso
+  definindo um denominador efetivo:
+
+    denom = 1 - Zwdot = 1 - (-0.0642) = 1.0642
+
+  A equação Z fica:    (1 - Zwdot)·ẇ = Zu·u + Zw·w + ...
+  Isolando ẇ:         ẇ = [Zu·u + Zw·w + (Zq+Ue)·q - g·sin(θe)·θ + Zde·δe] / denom
+
+  Substituindo na equação M:
+    Mw* = Mw + Mwdot·Zw/denom = -2.5355 + (-1.7437)·(-1.9898)/1.0642 = 0.725
+    Mq* = Mq + Mwdot·(Zq+Ue)/denom = -3.7566 + (-1.7437)·(10.94)/1.0642 = -22.84
+
+  Matriz A resultante (4×4), estado [u, w, q, θ]:
+
+    A = [  0.0048   0.0308   -1.9599   -9.6783 ]
+        [ -0.4352  -1.8696   10.9413   -1.5055 ]
+        [  1.1563   0.7247  -22.8354    2.6252 ]
+        [  0.0000   0.0000    1.0000    0.0000 ]
+
+  SIGNIFICADO FÍSICO DA CORREÇÃO MADELUNG:
+  - Mq* = -22.84 vs. Mq = -3.76: o amortecimento efetivo em q é 6x maior
+    quando se inclui Madelung. Ignorar essa correção subestima gravemente
+    o amortecimento do modo de período curto.
+  - O elemento A[2,1] = 0.725 (>0) indica que w positivo gera q positivo
+    após a correção Madelung — efeito de estabilidade.
+
+5.2 SCRIPT B — JACOBIANO NUMÉRICO (DIFERENÇAS FINITAS)
+--------------------------------------------------------
+
+  Implementação (Bloco 7 do Script B):
+    f₀ = longitudinal_nonlinear(x_eq)
+    A[:,j] = (longitudinal_nonlinear(x_eq + eps·eⱼ) - f₀) / eps
+    com eps = 1e-5
+
+  VANTAGENS:
+  + Completamente automático — funciona com qualquer EOM
+  + Não requer derivação analítica
+  + Captura não-linearidades locais ao redor do trim
+
+  DESVANTAGENS:
+  - NÃO inclui Madelung explicitamente: os termos ẇ (velocidade normal de
+    aceleração) não aparecem nas variáveis de estado do solve_ivp.
+    O Jacobiano numérico só "vê" as derivadas com respeito a [U,W,q,θ],
+    não a [u,w,q,θ] com a correção de aceleração.
+    Equivale a assumir Zwdot = Mwdot = 0.
+
+  - Sensível ao eps escolhido: eps muito grande → truncamento; eps pequeno
+    → cancelamento numérico. Para V ~ 12 m/s e q ~ 0 no trim, eps=1e-5
+    funciona bem para U e W, mas pode ser marginal para q (pequeno no trim).
+
+  - Se o trim estiver errado (α=34°, como no Script B), a Jacobiana
+    resultante é a linearização em torno de um ponto ERRADO, produzindo
+    autovalores sem significado físico.
+
+5.3 IMPACTO DA AUSÊNCIA DE MADELUNG
+-------------------------------------
+
+  A matriz A sem Madelung (Zwdot = Mwdot = 0) tem Mq* ≈ Mq = -3.76 s⁻¹.
+  Com Madelung (Script A): Mq* = -22.84 s⁻¹.
+
+  Os autovalores resultantes serão MUITO DIFERENTES. O amortecimento do
+  período curto subestimado sem Madelung pode até mudar a classificação
+  do modo (complexo vs. real overdamped).
+
+  Para esta aeronave (Cm_wdot = -0.591 elevado), a correção Madelung é
+  ESSENCIAL e não pode ser ignorada.
+
+
+================================================================================
+SEÇÃO 6 — ANÁLISE DE MODOS LONGITUDINAIS (AUTOVALORES)
+================================================================================
+
+6.1 RESULTADOS DO SCRIPT A
+----------------------------
+
+Autovalores da matriz A (analítica, com Madelung):
+
+  λ₁ = -23.243  (real, estável)  ← SP polo 1
+  λ₂ = -1.511   (real, estável)  ← SP polo 2
+  λ₃ = +0.027 + 0.714j          ← Fugóide (INSTÁVEL — σ > 0)
+  λ₄ = +0.027 - 0.714j          ← Fugóide conjugado
+
+  Modo de Período Curto (SP):
+    Tipo        : overdamped (dois polos reais — ζ = 1)
+    τ₁          : 1/23.24 = 0.043 s  (polo rápido)
+    τ₂          : 1/1.51  = 0.662 s  (polo lento)
+    Interpretação: o SP desta aeronave é supercrítico — responde a
+                   perturbações em α sem oscilar, de forma exponencial.
+
+  Modo Fugóide (PH):
+    ωn          : 0.714 rad/s
+    ζ           : -0.037  (NEGATIVO — instável!)
+    Período     : 8.8 s
+    Tempo duplo : ln(2)/0.027 ≈ 25.7 s (amplitude dobra em 25 s)
+
+  CAUSA DA INSTABILIDADE FUGÓIDE:
+    Cm_u = +0.034 > 0 (instabilidade de velocidade)
+    Quando a aeronave acelera, o momento de arfagem aumenta (nose-up),
+    o que aumenta α, aumenta a sustentação, e a aeronave sobe — sem
+    retorno estável. Isso define uma instabilidade de velocidade.
+
+    A aproximação de Lanchester (ζ_ph ≈ CD/(√2·CL)) não prevê essa
+    instabilidade pois assume Cm_u = 0. Para esta aeronave:
+      ζ_ph Lanchester ≈ 0.194/(√2 × 1.267) = 0.108 (positivo!)
+      ζ_ph computado  = -0.037 (negativo)
+    → Cm_u é o fator dominante e a aproximação falha aqui.
+
+  VERIFICAÇÃO ANALÍTICA DO SP:
+    Zalpha = -Zw × V₀ = 1.990 × 12 = 23.88 m/s²/rad
+    Malpha =  Mw × V₀ = -2.536 × 12 = -30.43 rad/s²/rad
+    Zalpha × Malpha = 23.88 × (-30.43) = -727 < 0
+
+    O produto negativo implica que a aproximação ωn_sp² ≈ Zalpha·Malpha
+    falha (raiz quadrada de negativo). O SP é overdamped porque Malpha < 0
+    (estaticamente estável) e Zα > 0, mas a combinação com os demais
+    termos resulta em dois polos reais distintos.
+
+6.2 RESULTADOS ESPERADOS DO SCRIPT B
+--------------------------------------
+
+  Como o Script B usa:
+  (a) Cm_u = 0 forçado → fugóide mais estável
+  (b) Sem Madelung → Mq* ≈ Mq (subestimado) → SP menos amortecido
+  (c) Trim em α=34° (errado) → toda a Jacobiana é inválida
+
+  Com as inconsistências acima, os autovalores do Script B não têm
+  interpretação física válida para a aeronave AXE FLY 2024.
+
+  SE os derivativos do Bloco 0 fossem corretos E a Jacobiana fosse
+  avaliada no trim correto (α=9.4°), sem Madelung, esperaríamos:
+    - SP: par complexo com amortecimento menor (Mq* ≈ Mq = -3.76 vs -22.84)
+    - Fugóide: estável (ζ > 0) porque Cm_u = 0
+
+6.3 COMPARAÇÃO DE MAPEAMENTOS
+-------------------------------
+
+  Script A utiliza mapa de polos com dois painéis:
+  - Visão geral: todos os polos, arcos de ζ constante
+  - Zoom: fugóide + SP-2, com semiplano instável sombreado
+
+  Script B (Bloco 7, 7.5) usa semicírculos de ωn constante, mapa de
+  polos e zeros separado. A escala não é adequada para mostrar
+  simultaneamente SP (distante) e fugóide (próximo da origem).
+
+  RECOMENDAÇÃO DIDÁTICA: o painel duplo do Script A é a solução correta
+  para este problema de separação de escala.
+
+
+================================================================================
+SEÇÃO 7 — SIMULAÇÃO TEMPORAL
+================================================================================
+
+7.1 CONGRUÊNCIAS
+-----------------
+
+  Ambos usam solve_ivp(RK45) com tolerâncias estritas. A estrutura das
+  simulações é idêntica em termos de integrador e variáveis de saída.
+
+7.2 DIVERGÊNCIAS
+-----------------
+
+  7.2.1 Script A — Degrau de +5° em δe, 60 s, comparação NL vs. Linear:
+
+        - Entrada: degrau permanente de +5° no elevator
+        - O modelo não-linear (EOM de Bryan + modelo completo) e o modelo
+          linear (lsim com StateSpace) são simulados e sobrepostos
+        - Perturbações plotadas: Δu, Δw, Δα, q, Δθ
+        - A sobreposição NL/Lin valida a hipótese de pequenas perturbações
+
+        VALOR: permite verificar quantitativamente até que amplitude as
+        equações lineares são válidas. Se as curvas se separam, o analista
+        sabe que está fora do regime linear.
+
+  7.2.2 Script B (Bloco 4) — Degrau de -2° em δe:
+
+        - Entrada: degrau de -2° no elevator
+        - Apenas simulação não-linear
+        - Sem comparação com modelo linear
+        - Variáveis: V, α, θ, q, U, W, γ
+
+  7.2.3 Script B (Bloco 4.5) — TESTE DE SUPERPOSIÇÃO (análise original):
+
+        Esta é a análise mais original e didaticamente valiosa do Script B.
+        Testa se o princípio de superposição é válido:
+
+          "Se o sistema é linear, então a resposta a 2×(-2°) deve ser igual
+          ao dobro da resposta a (-2°)."
+
+        - Simula resposta real a -4° (não-linear)
+        - Simula resposta a -2° e dobra (expectativa linear)
+        - Compara as duas curvas em V, α, θ, q, U, W, γ
+
+        VALOR DIDÁTICO: sem precisar de dois modelos (NL e Lin),
+        demonstra o grau de não-linearidade diretamente. Se as curvas
+        se separam para δe=-4°, a não-linearidade é significativa.
+        Para δe=-2°, ambos deveriam estar próximos (princípio de pequenas
+        perturbações verificado empiricamente).
+
+        AUSÊNCIA NO SCRIPT A: este tipo de análise não foi implementado
+        no Script A e seria uma adição valiosa.
+
+  7.2.4 Script B (Bloco 8) — Excitação direta dos modos:
+
+        - Perturbação em U (+10 m/s): excita preferencialmente o fugóide
+        - Perturbação em W (+5 m/s): excita preferencialmente o SP
+        - Comparação das respostas temporais dos dois modos isolados
+
+        VALOR: método clássico de identificação modal — perturbações
+        específicas ativam modos específicos do sistema.
+
+        AUSÊNCIA NO SCRIPT A: não implementado. Seria complementar ao
+        Bode plot para confirmar as frequências modais.
+
+
+================================================================================
+SEÇÃO 8 — RETRATO DE FASE (EXCLUSIVO DO SCRIPT B, BLOCO 6)
+================================================================================
+
+O retrato de fase no plano (α, q) para múltiplas condições iniciais é
+uma das análises mais ricas do Script B.
+
+  Implementação: para ΔΑ ∈ {-5°, -3°, -1°, 0°, 1°, 3°, 5°}, simula
+  a trajetória no plano de fase (α vs q) durante 40 s.
+
+  O que o retrato de fase revela:
+  - Ponto de equilíbrio (trim): onde todas as trajetórias convergem (ou não)
+  - Natureza do modo SP: se as espirais convergem → estável
+  - Não-linearidade: trajetórias não-paralelas indicam não-linearidade
+  - Separatrizes: curvas que dividem regiões de comportamento qualitativo
+                  diferente (importantes para análise de grande perturbação)
+
+  Para uma aeronave estável em SP, esperaríamos trajetórias espirais
+  convergindo ao trim. Para α=9.4°, q=0.
+
+  AUSÊNCIA NO SCRIPT A: o retrato de fase não foi implementado. É uma
+  ferramenta essencial para análise não-linear e deve ser adicionada ao
+  Script A em versão futura.
+
+  NOTA CRÍTICA: com o trim em α=34° (erro do Script B), o ponto de
+  equilíbrio plotado estará deslocado e as trajetórias não convergirão
+  corretamente para o trim real da aeronave.
+
+
+================================================================================
+SEÇÃO 9 — FUNÇÕES DE TRANSFERÊNCIA E ANÁLISE DE FREQUÊNCIA
+================================================================================
+
+9.1 SCRIPT A — scipy.signal (Bode plots)
+------------------------------------------
+
+  Método: scipy.signal.ss2tf converte (A,B,C,D) → (num, den)
+  Output: θ(s)/δe(s) e q(s)/δe(s)
+
+  Denominador (equação característica):
+    Δ(s) = s⁴ + 24.70·s³ + 34.30·s² + 10.75·s + 17.91
+
+  Raízes confirmam os autovalores de A:
+    s₁ = -23.24,  s₂ = -1.51,  s₃,₄ = +0.027 ± 0.714j
+
+  FT θ(s)/δe(s):
+    Numerador ≈ -73.6·s² - 138.7·s + 0.47   [grau 2 — dois zeros]
+    Denominador = Δ(s)                        [grau 4]
+
+  Os zeros da FT são importantes pois determinam as frequências onde
+  o controle não tem efeito. Para θ/δe, os zeros em s ≈ {-1.89, +0.003}
+  indicam que uma entrada harmônica em ω ≈ 0.003 rad/s não produz
+  variação em θ (coincide com o polo de fugóide instável — cancelamento
+  parcial).
+
+  Bode plot: identifica claramente as ressonâncias de SP (~23 rad/s) e
+  fugóide (~0.71 rad/s) com marcas verticais sobrepostas ao diagrama.
+
+9.2 SCRIPT B — biblioteca control (mapa P/Z)
+----------------------------------------------
+
+  Método: ct.StateSpace + ct.ss2tf
+  Output: U(s)/δe(s) e θ(s)/δe(s)
+
+  A biblioteca python-control oferece mais funcionalidades que scipy.signal:
+  - Diagramas de Nichols, Nyquist automáticos
+  - Análise de margens de ganho e fase direta
+  - Verificação de estabilidade BIBO
+
+  CRÍTICAS AO SCRIPT B:
+
+  (a) `import control as ct` sem instalação prévia:
+      A linha `pip install numpy scipy matplotlib` no meio do script
+      (linha 226) instala bibliotecas erradas — deveria ser
+      `pip install control` para a linha `import control as ct`.
+      Em ambiente local Python (não Colab), esta linha causará
+      SyntaxError.
+
+  (b) Zoom no mapa de P/Z:
+      O Script B tenta resolver o problema de escala (SP distante vs.
+      fugóide próximo) com um zoom em xlim=[-40, 5], mas ainda mostra
+      todos os polos em escala inadequada. A solução do Script A
+      (dois painéis com escalas independentes) é mais efetiva.
+
+  (c) Os zeros de θ/δe não são comentados ou analisados no texto do
+      Script B, perdendo uma oportunidade didática importante.
+
+
+================================================================================
+SEÇÃO 10 — INCONSISTÊNCIAS GRAVES NO SCRIPT B
+================================================================================
+
+A seguir, lista completa das inconsistências identificadas no Script B,
+ordenadas por impacto na validade dos resultados.
+
+10.1 INCONSISTÊNCIA CRÍTICA: Iy = 165669 kg·m²
+-------------------------------------------------
+
+  Localização: Bloco 0.10, linha `Iy = 165669.0`
+  Declarado: "Momento de inércia [kg·m²] (pode ser estimado)"
+
+  Para uma aeronave de 14 kg com c̄ = 0.50 m e l_EH = 1.12 m, o Iy
+  típico seria estimado como:
+
+    Iy ≈ m·(L_fuselagem)²/12 + m_asa·(corda)²/12 + ...
+    Para UAV de 14 kg: Iy ∈ [0.3, 1.5] kg·m²
+
+  O valor 165669 kg·m² corresponde a uma aeronave da classe de jatos
+  de treinamento avançado (Hawk, Aermacchi MB-339) com m ≈ 5000 kg.
+  Para o B737, Iy ≈ 10⁶ kg·m²; para UAV de 14 kg, Iy ≈ 0.4 kg·m².
+
+  IMPACTO:
+  - Mq_dim, Mw_dim, Me_dim todos errados (fator ~430000×)
+  - Todos os modos de arfagem calculados no Script B estão errados
+  - O denominador da FT θ/δe está completamente alterado
+
+  COMPARAÇÃO:
+  Script A usa Iy = 0.385 kg·m² (coerente com UAV de 14 kg)
+  Script B usa Iy = 165669 kg·m² (IMPOSSÍVEL para 14 kg)
+
+10.2 VARREDURA DE VELOCIDADES INCORRETA (Bloco 5)
+---------------------------------------------------
+
+  `V_range = np.linspace(120, 280, 50)  # [m/s]`
+
+  Para a aeronave em questão (V₀ = 12 m/s), velocidades de 120 a 280 m/s
+  correspondem a 10× a 23× a velocidade de trim. Isso implica:
+  - q_dyn = 0.5 × 1.225 × 120² = 8820 Pa  (vs. 88.2 Pa no trim)
+  - CL necessário = m·g/(q_dyn·S) = 14×9.81/(8820×1.213) = 0.0128
+    (muito abaixo do CL mínimo do perfil — a aeronave não sustenta)
+
+  A varredura foi copiada de um script de aeronave de alta velocidade
+  (F-4C Phantom, talvez) sem ajuste para o UAV de 14 kg.
+
+  VARREDURA CORRETA para este UAV: V ∈ [8, 20] m/s
+
+10.3 pip install NO MEIO DO CÓDIGO
+------------------------------------
+
+  `pip install numpy scipy matplotlib`  (linha 226 do Script B)
+
+  Em Python puro (não ambiente Jupyter/Colab), esta linha causa:
+    SyntaxError: invalid syntax
+
+  Em Colab, executa a instalação do pip, mas instala numpy/scipy/matplotlib
+  que já estão presentes — e NÃO instala a biblioteca `control` necessária.
+
+  CORRETO seria: `# pip install control` como comentário de instrução,
+  ou em célula separada no Colab: `!pip install control`.
+
+10.4 NOMENCLATURA CONTRADITÓRIA
+---------------------------------
+
+  O Bloco 0 declara: "AXE FLY 2024" como aeronave de referência
+  O Bloco 1 declara: "F-4C Phantom" como aeronave
+
+  Os parâmetros (m=14 kg, V₀=12 m/s) são do AXE FLY 2024.
+  Os coeficientes do dicionário `derivadas_calculadas` são computados
+  com os parâmetros do UAV, mas inseridos em um contexto que diz ser o
+  F-4C Phantom.
+
+10.5 Cm_u FORÇADO A ZERO SEM JUSTIFICATIVA
+--------------------------------------------
+
+  `Mu_dim = fator_M * Cm_alpha_total * 0.0`
+
+  O fator `* 0.0` zera Mu_dim explicitamente. O comentário diz:
+  "Mu ≈ 0 para subsônico" — o que é uma simplificação razoável para
+  aeronaves subsônicas em regime de baixa compressibilidade.
+
+  IMPACTO: Com Mu=0, o fugóide tende a ser estável (como previsto por
+  Lanchester). Com Mu≠0 (como no Script A), o fugóide pode ser instável.
+  A diferença de comportamento é fisicamente significativa.
+
+  RECOMENDAÇÃO: manter Cm_u=0 com um comentário explicando que é uma
+  aproximação para M < 0.3, válida para este UAV (M ≈ 0.035). Mas
+  reconhecer que no Script A, Cm_u = 0.034 provavelmente vem de efeitos
+  de propulsão ou acoplamento motor-aerodinâmica, não de compressibilidade.
+
+10.6 CX_de SETADO A ZERO NO DICIONÁRIO
+-----------------------------------------
+
+  `'CX_de' : 0.0,  # simplificação: efeito pequeno`
+
+  Fisicamente correto (o elevator tem efeito desprezível na força axial),
+  mas o Script A usa CX_de = 0.0618 (valor não-nulo). A diferença é
+  pequena mas deveria ser mencionada explicitamente.
+
+
+================================================================================
+SEÇÃO 11 — SÍNTESE FINAL E RECOMENDAÇÕES
+================================================================================
+
+11.1 TABELA RESUMO DE PONTOS FORTES E FRACOS
+----------------------------------------------
+
+  Aspecto                     | Script A            | Script B
+  ----------------------------+---------------------+---------------------
+  Rigor matemático            | ALTO                | MÉDIO
+  Correção Madelung           | SIM (explícita)     | NÃO (ausente)
+  Trim correto                | SIM (analítico)     | NÃO (bug de base)
+  Coerência de parâmetros     | ALTA                | BAIXA (Iy errado)
+  Origem dos derivativos      | Tabelada (caixa-pta)| Calculada (1ª prin.)
+  Valor pedagógico físico     | MÉDIO               | ALTO (Bloco 0)
+  Análise não-linear          | BÁSICA (NL vs Lin)  | RICA (retrato fase, superpos.)
+  Análise de frequência       | COMPLETA (Bode)     | PARCIAL (P/Z)
+  Excitação modal direta      | NÃO                 | SIM (Bloco 8)
+  Teste de superposição       | NÃO                 | SIM (Bloco 4.5)
+  Varredura de velocidades    | NÃO                 | SIM (mas errada)
+  Bode plots                  | SIM                 | NÃO
+  Validação de resultados     | MODERADA            | AUSENTE
+
+11.2 O QUE CADA SCRIPT PODE APRENDER DO OUTRO
+-----------------------------------------------
+
+  Script A deveria incorporar do Script B:
+  [1] Bloco 0: derivação de 1ª princípios dos coeficientes de estabilidade
+  [2] Bloco 4.5: teste de superposição para validação da hipótese linear
+  [3] Bloco 6: retrato de fase (α vs q) para análise não-linear
+  [4] Bloco 8: excitação direta dos modos longitudinais
+  [5] Varredura de trim em velocidade (corrigida para V ∈ [8, 20] m/s)
+
+  Script B deveria incorporar do Script A:
+  [1] Forças de base no modelo aerodinâmico (CX_trim, CZ_trim)
+  [2] Trim analítico em vez de fsolve com modelo perturbativo
+  [3] Correção Madelung na linearização
+  [4] Bode plots para análise de frequência
+  [5] Comparação NL vs. Linear nas simulações temporais
+  [6] Corrigir Iy para valor físico coerente com a aeronave
+
+  O Script B também deve:
+  [7] Corrigir V_range para valores coerentes com o UAV
+  [8] Remover `pip install` do código Python
+  [9] Manter nomenclatura consistente (AXE FLY 2024, não F-4C Phantom)
+  [10] Usar scipy.signal em vez de python-control para portabilidade
+
+11.3 SCRIPT INTEGRADO IDEAL
+-----------------------------
+
+  Um script de análise completa de dinâmica longitudinal deveria seguir
+  esta sequência:
+
+  BLOCO 0 : Geometria construtiva → Derivadas de 1ª princípios (Script B)
+  BLOCO 1 : Parâmetros consolidados (com derivadas de 1ª princ. ou tabeladas)
+  BLOCO 2 : Modelo aerodinâmico COMPLETO (base + perturbação, com CX_trim)
+             + EOM de Bryan
+  BLOCO 3 : Trim analítico a partir de equilíbrio de forças (Script A)
+  BLOCO 4 : Linearização analítica com Madelung (Script A)
+  BLOCO 5 : Autovalores → identificação dos modos SP e PH (Script A)
+             + mapa de polos com dois painéis (Script A)
+  BLOCO 6 : Simulação temporal:
+             (a) Resposta ao degrau NL vs. Linear (Script A)
+             (b) Teste de superposição (Script B)
+             (c) Excitação direta dos modos (Script B)
+  BLOCO 7 : Retrato de fase (Script B)
+  BLOCO 8 : Funções de transferência + Bode plots (Script A)
+             + Mapa de polos e zeros completo (Script B)
+  BLOCO 9 : Varredura de trim em velocidade (Script B, corrigida)
+
+11.4 NOTA FINAL AO ALUNO
+--------------------------
+
+  A comparação entre os dois scripts revela uma lição fundamental da
+  engenharia aeronáutica computacional:
+
+  "Nunca confie nos resultados sem verificar a consistência dos
+  parâmetros de entrada e a correção do ponto de operação."
+
+  O Script B demonstra como um modelo matematicamente correto na forma
+  das equações pode produzir resultados completamente errados por conta
+  de:
+    - Um valor de Iy errado por fator de 430000
+    - Uma velocidade de trim sweep incompatível com a aeronave
+    - Um trim solver que converge para o ponto errado
+
+  O Script A demonstra como a abordagem analítica sistemática, seguindo
+  Cook rigorosamente, produz resultados fisicamente consistentes — mas
+  perde a oportunidade de derivar os coeficientes construtivamente.
+
+  O caminho ideal é a integração das duas abordagens, aproveitando
+  o rigor analítico do Script A e a riqueza física e pedagógica do
+  Bloco 0 do Script B.
+
+================================================================================
+FIM DO DOCUMENTO
+Gerado em: Abril de 2026
+Referências: Cook (2013), Bryan (1911), Nelson (1998), Perkins & Hage (1949)
+================================================================================
